@@ -303,6 +303,7 @@ for key, default in {
     "assets": [],
     "points": [],
     "trend_df": None,
+    "spectrum_data": None,
     "selected_asset": None,
     "selected_point": None,
     "base_url": "http://127.0.0.1:14050",
@@ -365,7 +366,194 @@ def get_trend(base_url, token, point_id, from_date=None, to_date=None, max_readi
     resp.raise_for_status()
     return resp.json() if resp.status_code != 204 else []
 
+def get_spectrum(base_url, token, point_id):
+    resp = requests.get(
+        f"{base_url}/v1/points/{point_id}/dynamicMeasurements",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json() if resp.status_code != 204 else None
+
 def parse_trend(data) -> pd.DataFrame:
+    """
+    Suporta dois formatos de resposta da API:
+
+    Formato A — legado (campos planos):
+        { "timestamp": "...", "value": {"value": 1.2, "unit": "g"} }
+
+    Formato B — real (array Measurements):
+        {
+          "ReadingTimeUTC": "2026-03-10T18:45:15.353",
+          "PointID": 4164,
+          "Speed": 0.0, "SpeedUnits": "RPM",
+          "Process": 0.0, "ProcessUnits": "",
+          "Measurements": [
+            {"Channel": 1, "Direction": "X", "ChannelName": "Overall",
+             "Level": 37.0, "Units": "C", "BOV": 0.0}
+          ]
+        }
+
+    Retorna DataFrame com colunas:
+        timestamp | value | unit | channel | channel_name | direction | speed | process
+    """
+    rows = []
+
+    for item in data:
+        # ── Formato B: array Measurements ──────────────────────────
+        if "Measurements" in item and isinstance(item["Measurements"], list):
+            ts_raw = (
+                item.get("ReadingTimeUTC")
+                or item.get("ReadingTime")
+                or item.get("dateUTC")
+                or item.get("timestamp")
+            )
+            speed   = item.get("Speed",   None)
+            process = item.get("Process", None)
+
+            measurements = item["Measurements"]
+            if not measurements:
+                continue
+
+            for meas in measurements:
+                rows.append({
+                    "timestamp":    ts_raw,
+                    "value":        meas.get("Level"),
+                    "unit":         meas.get("Units", ""),
+                    "channel":      meas.get("Channel", 1),
+                    "channel_name": meas.get("ChannelName", "Overall"),
+                    "direction":    meas.get("Direction", ""),
+                    "bov":          meas.get("BOV", None),
+                    "speed":        speed,
+                    "process":      process,
+                })
+
+        # ── Formato A: campos planos (legado) ───────────────────────
+        else:
+            ts_raw  = (
+                item.get("timestamp")
+                or item.get("dateUTC")
+                or item.get("date")
+                or item.get("ReadingTimeUTC")
+            )
+            val_obj = item.get("value") or {}
+            if isinstance(val_obj, dict):
+                value = val_obj.get("value")
+                unit  = val_obj.get("unit", "")
+            else:
+                value = val_obj
+                unit  = item.get("unit", "")
+
+            rows.append({
+                "timestamp":    ts_raw,
+                "value":        value,
+                "unit":         unit,
+                "channel":      1,
+                "channel_name": item.get("source", "Overall"),
+                "direction":    "",
+                "bov":          None,
+                "speed":        None,
+                "process":      None,
+            })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df["value"]     = pd.to_numeric(df["value"],     errors="coerce")
+    df["speed"]     = pd.to_numeric(df.get("speed"), errors="coerce")
+    df["process"]   = pd.to_numeric(df.get("process"), errors="coerce")
+    df.dropna(subset=["timestamp", "value"], inplace=True)
+    df.sort_values("timestamp", inplace=True)
+    df.drop_duplicates(subset=["timestamp", "channel"], keep="last", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+def parse_spectrum(data):
+    """
+    Converte a resposta de /v1/points/{id}/dynamicMeasurements em lista de dicts por canal.
+
+    Estrutura esperada (data pode ser um dict ou lista de dicts):
+        {
+          "PointID": 5567,
+          "SampleRate": 5120.0,
+          "Samples": 8192,
+          "EU": "m/s^2E",
+          "StartFrequency": 0.0,
+          "EndFrequency": 2000.0,
+          "Speed": 0.0, "SpeedUnits": "RPM",
+          "Process": 36.0,
+          "Measurements": [
+            {
+              "MeasurementType": 2,
+              "Direction": 0,
+              "Values": [0.001, 0.002, ...]   ← amplitudes do espectro
+            }
+          ]
+        }
+
+    Retorna lista de dicts:
+        [{
+          "channel_idx": 0,
+          "direction": 0,
+          "mtype": 2,
+          "eu": "m/s^2E",
+          "start_freq": 0.0,
+          "end_freq": 2000.0,
+          "freqs": np.ndarray,
+          "values": np.ndarray,
+          "sample_rate": 5120.0,
+          "samples": 8192,
+          "speed": 0.0,
+          "speed_units": "RPM",
+        }]
+    """
+    if data is None:
+        return []
+
+    # aceita tanto dict único quanto lista
+    items = data if isinstance(data, list) else [data]
+    channels = []
+
+    for item in items:
+        eu          = item.get("EU") or item.get("EUSpectrum") or "—"
+        start_f     = float(item.get("StartFrequency", 0.0))
+        end_f       = float(item.get("EndFrequency",   0.0))
+        sample_rate = float(item.get("SampleRate",     0.0))
+        samples     = int(item.get("Samples",          0))
+        speed       = item.get("Speed", 0.0)
+        speed_units = item.get("SpeedUnits", "RPM")
+        process     = item.get("Process", None)
+
+        measurements = item.get("Measurements") or []
+        for idx, meas in enumerate(measurements):
+            values = meas.get("Values") or []
+            if not values:
+                continue
+            n = len(values)
+            # eixo de frequência: interpolação linear entre start_f e end_f
+            freqs = np.linspace(start_f, end_f, n) if end_f > start_f else np.arange(n)
+
+            channels.append({
+                "channel_idx": idx,
+                "direction":   meas.get("Direction", idx),
+                "mtype":       meas.get("MeasurementType", 0),
+                "eu":          eu,
+                "start_freq":  start_f,
+                "end_freq":    end_f,
+                "freqs":       np.array(freqs, dtype=float),
+                "values":      np.array(values, dtype=float),
+                "sample_rate": sample_rate,
+                "samples":     samples,
+                "speed":       float(speed) if speed is not None else 0.0,
+                "speed_units": speed_units,
+                "process":     float(process) if process is not None else 0.0,
+            })
+
+    return channels
+
+
     """
     Suporta dois formatos de resposta da API:
 
@@ -683,6 +871,7 @@ if load_points:
     selected_asset = asset_options[chosen_asset_label]
     st.session_state.selected_asset = selected_asset
     st.session_state.trend_df       = None
+    st.session_state.spectrum_data  = None
     st.session_state.selected_point = None
     with st.spinner(f"Carregando points de [{selected_asset['ID']}] {selected_asset['Name']}..."):
         try:
@@ -747,7 +936,7 @@ if st.session_state.points:
 
     # Seleção de point
     st.markdown("<br>", unsafe_allow_html=True)
-    col_pt, col_btn2 = st.columns([3, 1])
+    col_pt, col_btn2, col_btn3 = st.columns([3, 1, 1])
     point_opts = {f"[{p.get('id',p.get('ID'))}]  {p.get('name',p.get('Name','?'))}": p for p in points}
 
     with col_pt:
@@ -759,10 +948,14 @@ if st.session_state.points:
     with col_btn2:
         st.markdown("<br>", unsafe_allow_html=True)
         load_trend = st.button("📈  Carregar Tendência", use_container_width=True)
+    with col_btn3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_spectrum = st.button("〜  Carregar Espectro", use_container_width=True)
 
     if load_trend:
         pt = point_opts[chosen_point_label]
         st.session_state.selected_point = pt
+        st.session_state.spectrum_data  = None
         pid = pt.get("id", pt.get("ID"))
 
         from_dt = st.session_state.get("date_from")
@@ -779,6 +972,26 @@ if st.session_state.points:
                 st.session_state.trend_df = df
             except Exception as e:
                 st.error(f"Erro ao buscar trend: {e}")
+
+    if load_spectrum:
+        pt = point_opts[chosen_point_label]
+        st.session_state.selected_point = pt
+        pid = pt.get("id", pt.get("ID"))
+
+        with st.spinner(f"Buscando espectro de vibração para point [{pid}]..."):
+            try:
+                raw_spec = get_spectrum(st.session_state.base_url, st.session_state.token, pid)
+                channels_spec = parse_spectrum(raw_spec)
+                st.session_state.spectrum_data = channels_spec
+                if not channels_spec:
+                    st.warning("⚠ Nenhum dado de espectro disponível para este ponto.")
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    st.warning("⚠ Este ponto não possui medições dinâmicas (espectro) disponíveis.")
+                else:
+                    st.error(f"Erro HTTP ao buscar espectro: {e}")
+            except Exception as e:
+                st.error(f"Erro ao buscar espectro: {e}")
 
 
 # ─────────────────────────────────────────────
@@ -863,12 +1076,11 @@ if st.session_state.trend_df is not None:
                 <div class="value">{len(df)}</div>
                 <div class="unit">pontos no período</div>
             </div>
-            {"" if not has_speed else f'''
             <div class="metric-card">
                 <div class="label">Velocidade (última)</div>
                 <div class="value">{speed_last:.1f}</div>
                 <div class="unit">RPM</div>
-            </div>'''}
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1008,3 +1220,199 @@ if st.session_state.trend_df is not None:
                 file_name=f"trend_{pid}_ch{selected_ch}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
+
+
+# ─────────────────────────────────────────────
+# SPECTRUM PLOT
+# ─────────────────────────────────────────────
+if st.session_state.spectrum_data:
+    channels_spec = st.session_state.spectrum_data
+    point  = st.session_state.selected_point
+    pname  = point.get("name", point.get("Name", "—")) if point else "—"
+    pid    = point.get("id",   point.get("ID",   "—")) if point else "—"
+
+    st.markdown(f'<div class="section-title">Espectro de Vibração — {pname}</div>',
+                unsafe_allow_html=True)
+
+    # ── Info cards do espectro ──────────────────
+    first = channels_spec[0]
+    speed_val = first.get("speed", 0.0)
+    n_ch = len(channels_spec)
+
+    st.markdown(f"""
+    <div class="metric-row">
+        <div class="metric-card">
+            <div class="label">Canais</div>
+            <div class="value">{n_ch}</div>
+            <div class="unit">direções medidas</div>
+        </div>
+        <div class="metric-card">
+            <div class="label">Faixa de Frequência</div>
+            <div class="value">{first['end_freq']:.0f}</div>
+            <div class="unit">{first['start_freq']:.0f} – {first['end_freq']:.0f} Hz</div>
+        </div>
+        <div class="metric-card">
+            <div class="label">Taxa de Amostragem</div>
+            <div class="value">{first['sample_rate']:.0f}</div>
+            <div class="unit">Hz · {first['samples']} amostras</div>
+        </div>
+        <div class="metric-card">
+            <div class="label">Unidade</div>
+            <div class="value" style="font-size:1.3rem;margin-top:6px;">{first['eu']}</div>
+            <div class="unit">amplitude</div>
+        </div>
+        {"" if speed_val == 0.0 else f'''
+        <div class="metric-card">
+            <div class="label">Velocidade</div>
+            <div class="value">{speed_val:.1f}</div>
+            <div class="unit">{first["speed_units"]}</div>
+        </div>'''}
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Seletor de canal (se múltiplos) ────────
+    DIRECTION_MAP = {0: "X", 1: "Y", 2: "Z", 3: "H", 4: "V", 5: "A", -1: "—"}
+    MTYPE_MAP     = {0: "Waveform", 1: "Espectro (velocidade)", 2: "Espectro", 3: "Cepstrum"}
+
+    ch_labels = []
+    for i, ch in enumerate(channels_spec):
+        dir_str  = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
+        mtype_str = MTYPE_MAP.get(ch["mtype"], f"Tipo {ch['mtype']}")
+        ch_labels.append(f"Canal {i+1}  [{dir_str}]  — {mtype_str}")
+
+    if len(ch_labels) > 1:
+        sel_ch_label = st.selectbox("Canal do espectro", options=ch_labels, key="spec_ch_sel")
+        sel_ch_idx = ch_labels.index(sel_ch_label)
+    else:
+        sel_ch_idx = 0
+
+    ch = channels_spec[sel_ch_idx]
+    freqs  = ch["freqs"]
+    values = ch["values"]
+    eu     = ch["eu"]
+    dir_str = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
+
+    # ── Picos principais (top 10) ───────────────
+    peak_indices = np.argsort(values)[::-1][:10]
+    peak_freqs   = freqs[peak_indices]
+    peak_vals    = values[peak_indices]
+
+    # ── Frequência de rotação (1X, 2X, 3X) ──────
+    harmonic_lines = []
+    if speed_val and speed_val > 0:
+        rpm_hz = speed_val / 60.0
+        for h in range(1, 6):
+            hf = rpm_hz * h
+            if ch["start_freq"] <= hf <= ch["end_freq"]:
+                harmonic_lines.append((hf, f"{h}X  {hf:.1f} Hz"))
+
+    # ── Plotly ──────────────────────────────────
+    fig_spec = go.Figure()
+
+    # Área preenchida sob o espectro
+    fig_spec.add_trace(go.Scatter(
+        x=freqs, y=values,
+        fill="tozeroy",
+        fillcolor="rgba(0,217,255,0.06)",
+        line=dict(color="rgba(0,0,0,0)"),
+        showlegend=False, hoverinfo="skip",
+    ))
+
+    # Linha do espectro
+    fig_spec.add_trace(go.Scatter(
+        x=freqs, y=values,
+        mode="lines",
+        name=f"Espectro [{dir_str}]",
+        line=dict(color="#00d9ff", width=1.5),
+        hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.4f} " + eu + "<extra></extra>",
+    ))
+
+    # Marcadores de picos
+    fig_spec.add_trace(go.Scatter(
+        x=peak_freqs, y=peak_vals,
+        mode="markers+text",
+        name="Picos",
+        marker=dict(size=8, color="#f0a500", symbol="triangle-up",
+                    line=dict(color="#f0a500", width=1)),
+        text=[f"{f:.1f}" for f in peak_freqs],
+        textposition="top center",
+        textfont=dict(family="Share Tech Mono, monospace", size=9, color="#f0a500"),
+        hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.5f} " + eu + "<extra>Pico</extra>",
+    ))
+
+    # Linhas harmônicas de rotação
+    for hf, hlabel in harmonic_lines:
+        fig_spec.add_vline(
+            x=hf,
+            line=dict(color="rgba(168,85,247,0.6)", width=1, dash="dot"),
+            annotation_text=hlabel,
+            annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
+            annotation_position="top",
+        )
+
+    fig_spec.update_layout(
+        paper_bgcolor="#090c10",
+        plot_bgcolor="#0d1117",
+        font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
+        title=dict(
+            text=(f"<b>{pname}</b>  ·  Espectro  ·  "
+                  f"<span style='color:#00d9ff'>Direção {dir_str}</span>  ·  "
+                  f"<span style='color:#8b949e'>{eu}</span>"),
+            font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
+            x=0.01,
+        ),
+        xaxis=dict(
+            gridcolor="#21262d", zeroline=False,
+            tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+            title=dict(text="Frequência [Hz]", font=dict(color="#8b949e", size=11)),
+            rangeslider=dict(visible=True, bgcolor="#0d1117", thickness=0.06),
+        ),
+        yaxis=dict(
+            gridcolor="#21262d", zeroline=False,
+            tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+            title=dict(text=f"Amplitude  [{eu}]", font=dict(color="#8b949e", size=11)),
+        ),
+        legend=dict(
+            bgcolor="rgba(13,17,23,0.8)", bordercolor="#21262d", borderwidth=1,
+            font=dict(family="Exo 2, sans-serif", size=11, color="#c9d1d9"),
+            orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+        ),
+        hovermode="x",
+        margin=dict(l=60, r=40, t=70, b=60),
+        height=450,
+    )
+
+    st.plotly_chart(fig_spec, use_container_width=True)
+
+    # ── Tabela de picos ──────────────────────────
+    with st.expander("📊  Top 10 picos do espectro"):
+        df_peaks = pd.DataFrame({
+            "Frequência (Hz)": [f"{f:.3f}" for f in peak_freqs],
+            f"Amplitude ({eu})": [f"{v:.5f}" for v in peak_vals],
+            "Rank": [f"#{i+1}" for i in range(len(peak_freqs))],
+        })
+        st.dataframe(df_peaks, use_container_width=True, hide_index=True)
+
+        csv_spec = df_peaks.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇  Exportar picos CSV",
+            data=csv_spec,
+            file_name=f"spectrum_peaks_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
+
+    # ── Exportar espectro completo ───────────────
+    with st.expander("🗃  Ver espectro completo (dados brutos)"):
+        df_full_spec = pd.DataFrame({
+            "Frequência (Hz)": np.round(freqs, 4),
+            f"Amplitude ({eu})": np.round(values, 6),
+        })
+        st.dataframe(df_full_spec, use_container_width=True, hide_index=True, height=300)
+
+        csv_full = df_full_spec.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇  Exportar espectro completo CSV",
+            data=csv_full,
+            file_name=f"spectrum_full_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
