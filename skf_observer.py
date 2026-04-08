@@ -299,15 +299,19 @@ section[data-testid="stSidebar"] * {
 # SESSION STATE
 # ─────────────────────────────────────────────
 for key, default in {
-    "token": None,
-    "assets": [],
-    "points": [],
-    "trend_df": None,
-    "spectrum_data": None,
+    "token":          None,
+    "token_ts":       None,
+    "assets":         [],
+    "points":         [],
+    "trend_df":       None,
+    "spectrum_data":  None,
     "selected_asset": None,
     "selected_point": None,
-    "base_url": "http://127.0.0.1:14050",
-    "username": "admin",
+    "imx_df":         None,
+    "imx_log":        [],
+    "base_url":       "http://127.0.0.1:14050",
+    "username":       "admin",
+    "_password":      "",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -346,6 +350,7 @@ def get_points(base_url, token, machine_id):
     resp = requests.get(
         f"{base_url}/v1/machines/{machine_id}/points",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json; v=2.0"},
+        params={"machine_id": machine_id},
         timeout=10,
     )
     resp.raise_for_status()
@@ -367,6 +372,7 @@ def get_trend(base_url, token, point_id, from_date=None, to_date=None, max_readi
     return resp.json() if resp.status_code != 204 else []
 
 def get_spectrum(base_url, token, point_id):
+    """GET /v1/points/{pointId}/dynamicMeasurements — retorna última medição dinâmica (espectro)."""
     resp = requests.get(
         f"{base_url}/v1/points/{point_id}/dynamicMeasurements",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
@@ -680,6 +686,251 @@ def status_badge(status_list):
     return '<span class="badge badge-offline">—</span>'
 
 
+
+# ─────────────────────────────────────────────
+# IMx-1 SCAN — HELPERS DE API
+# ─────────────────────────────────────────────
+
+# NodeTypes que identificam sensores IMx-1
+IMX1_NODE_TYPES = {11101, 11102, 11103, 11104}
+# NodeType do ponto de temperatura (prioridade máxima)
+IMX1_TEMP_NODE_TYPE = 11104
+# EUType do ponto de temperatura
+IMX1_TEMP_EU_TYPE = 10905
+# Data de corte para varredura
+IMX1_FROM_DATE = "2024-05-01T00:00:00"
+
+
+def _ensure_token(base_url: str, username: str, password: str) -> str:
+    """
+    Retorna o token atual. Renova automaticamente se tiver mais de 18 minutos.
+    """
+    import time
+    now = time.time()
+    ts  = st.session_state.get("token_ts") or 0
+    if st.session_state.token and (now - ts) < 18 * 60:
+        return st.session_state.token
+    token = autenticar(base_url, username, password)
+    st.session_state.token    = token
+    st.session_state.token_ts = now
+    return token
+
+
+def get_points_v1(base_url: str, token: str, machine_id) -> list:
+    """GET /v1/machines/{machineId}/points — retorna points com NodeType."""
+    resp = requests.get(
+        f"{base_url}/v1/machines/{machine_id}/points",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=15,
+    )
+    if resp.status_code in (204, 404):
+        return []
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else []
+
+
+def get_trend_first_reading(base_url: str, token: str, point_id) -> dict | None:
+    """
+    GET /v1/points/{pointId}/trendMeasurements — retorna APENAS a primeira
+    leitura a partir de 01/05/2024 (descending=false, numReadings=1).
+    """
+    resp = requests.get(
+        f"{base_url}/v1/points/{point_id}/trendMeasurements",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        params={
+            "fromDateUTC":  IMX1_FROM_DATE,
+            "descending":   "false",
+            "numReadings":  1,
+        },
+        timeout=15,
+    )
+    if resp.status_code in (204, 404):
+        return None
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, list) and data:
+        return data[0]
+    if isinstance(data, dict):
+        return data
+    return None
+
+
+def get_imx_sensors(base_url: str, token: str) -> dict:
+    """
+    GET /v1/nextgensensor — retorna dict {IDNode: {SensorIdentifier, BatteryLevel, ...}}.
+    """
+    resp = requests.get(
+        f"{base_url}/v1/nextgensensor",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=15,
+    )
+    if resp.status_code in (204, 404):
+        return {}
+    resp.raise_for_status()
+    data = resp.json()
+    sensors = data if isinstance(data, list) else data.get("value", data.get("items", []))
+    index = {}
+    for s in (sensors if isinstance(sensors, list) else []):
+        nid = s.get("IDNode") or s.get("idNode") or s.get("NodeID")
+        if nid is not None:
+            index[int(nid)] = s
+    return index
+
+
+def run_imx_scan(base_url: str, username: str, password: str,
+                 progress_cb=None, log_cb=None) -> pd.DataFrame:
+    """
+    Varredura completa de sensores IMx-1:
+      1. Lista todos os assets
+      2. Para cada asset, lista points via v1 e filtra NodeType IMx-1
+      3. Prioriza ponto de temperatura; usa qualquer IMx-1 se não houver
+      4. Busca primeira leitura de tendência (≥ 01/05/2024)
+      5. Cruza com /v1/nextgensensor para Hardware ID e bateria
+      6. Monta DataFrame final com colunas de BI
+    """
+    import time
+
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+
+    def prog(val: float, text: str = ""):
+        if progress_cb:
+            progress_cb(val, text)
+
+    today = datetime.now(timezone.utc)
+    rows  = []
+
+    # ── 1. Token inicial ──────────────────────────
+    token = _ensure_token(base_url, username, password)
+    log("🔑 Token obtido.")
+
+    # ── 2. Assets ────────────────────────────────
+    assets_list = get_assets(base_url, token)
+    total = len(assets_list)
+    log(f"🏭 {total} asset(s) encontrado(s).")
+    prog(0.02, f"0 / {total} assets processados")
+
+    # ── 3. Sensores IMx (metadados) ───────────────
+    token = _ensure_token(base_url, username, password)
+    try:
+        sensor_index = get_imx_sensors(base_url, token)
+        log(f"📡 {len(sensor_index)} sensor(es) IMx indexados.")
+    except Exception as e:
+        sensor_index = {}
+        log(f"⚠ /v1/nextgensensor indisponível: {e}")
+
+    # ── 4. Iterar assets → points → trend ────────
+    for i, asset in enumerate(assets_list):
+        machine_id   = asset.get("ID") or asset.get("id")
+        machine_name = asset.get("Name") or asset.get("name", "—")
+        sys_created  = asset.get("SystemCreatedDate") or asset.get("Created") or ""
+
+        token = _ensure_token(base_url, username, password)
+
+        try:
+            points_v1 = get_points_v1(base_url, token, machine_id)
+        except Exception as e:
+            log(f"  ↳ [{machine_id}] {machine_name}: erro ao listar points — {e}")
+            time.sleep(0.1)
+            continue
+
+        # Filtra apenas pontos IMx-1
+        imx_points = [
+            p for p in points_v1
+            if int(p.get("NodeType", 0)) in IMX1_NODE_TYPES
+        ]
+
+        if not imx_points:
+            prog((i + 1) / total, f"{i+1} / {total}: {machine_name} — sem IMx-1")
+            time.sleep(0.05)
+            continue
+
+        # Prioriza temperatura (NodeType 11104 ou EUType 10905)
+        temp_points = [
+            p for p in imx_points
+            if int(p.get("NodeType", 0)) == IMX1_TEMP_NODE_TYPE
+            or int(p.get("EUType",   0)) == IMX1_TEMP_EU_TYPE
+        ]
+        target_point = temp_points[0] if temp_points else imx_points[0]
+
+        point_id  = target_point.get("ID") or target_point.get("id") or target_point.get("PointID")
+        id_node   = target_point.get("ParentID") or target_point.get("IDNode") or target_point.get("NodeID")
+
+        log(f"  ↳ [{machine_id}] {machine_name} — point {point_id} (NodeType {target_point.get('NodeType')})")
+
+        # Busca primeira leitura
+        token = _ensure_token(base_url, username, password)
+        try:
+            first = get_trend_first_reading(base_url, token, point_id)
+        except Exception as e:
+            log(f"    ⚠ trend error: {e}")
+            first = None
+        time.sleep(0.15)          # delay entre chamadas
+
+        if first is None:
+            commissioning_dt = None
+            dias_uso         = None
+            taxa_bateria     = None
+        else:
+            ts_raw = (
+                first.get("ReadingTimeUTC")
+                or first.get("readingTimeUTC")
+                or first.get("timestamp")
+                or first.get("dateUTC")
+            )
+            try:
+                commissioning_dt = pd.to_datetime(ts_raw, utc=True)
+            except Exception:
+                commissioning_dt = None
+            dias_uso = (today - commissioning_dt).days if commissioning_dt else None
+
+        # Cruza com sensor index
+        sensor_meta  = sensor_index.get(int(id_node), {}) if id_node is not None else {}
+        hardware_id  = (
+            sensor_meta.get("SensorIdentifier")
+            or sensor_meta.get("sensorIdentifier")
+            or sensor_meta.get("HardwareID")
+            or "—"
+        )
+        battery_lvl  = sensor_meta.get("BatteryLevel") or sensor_meta.get("batteryLevel")
+        if battery_lvl is not None:
+            try:
+                battery_lvl = float(battery_lvl)
+            except Exception:
+                battery_lvl = None
+
+        if dias_uso and dias_uso > 0 and battery_lvl is not None:
+            taxa_bateria = round((100.0 - battery_lvl) / dias_uso, 4)
+        else:
+            taxa_bateria = None
+
+        rows.append({
+            "HardwareID":                hardware_id,
+            "MachineID":                 machine_id,
+            "MachineName":               machine_name,
+            "BatteryLevel":              battery_lvl,
+            "SystemCreatedDate":         sys_created,
+            "ProvavelDataComissionamento": commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
+            "DiasDeUso":                 dias_uso,
+            "TaxaConsumoBateria":        taxa_bateria,
+        })
+
+        prog((i + 1) / total, f"{i+1} / {total}: {machine_name}")
+
+    log(f"✅ Varredura concluída — {len(rows)} sensor(es) IMx-1 identificado(s).")
+    prog(1.0, "Concluído")
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "HardwareID", "MachineID", "MachineName", "BatteryLevel",
+            "SystemCreatedDate", "ProvavelDataComissionamento",
+            "DiasDeUso", "TaxaConsumoBateria",
+        ])
+    return pd.DataFrame(rows)
+
+
 # ─────────────────────────────────────────────
 # SIDEBAR — Conexão
 # ─────────────────────────────────────────────
@@ -711,8 +962,11 @@ with st.sidebar:
         with st.spinner("Autenticando..."):
             try:
                 token = autenticar(base_url, username, password)
+                import time as _time
                 st.session_state.token    = token
+                st.session_state.token_ts = _time.time()
                 st.session_state.username = username
+                st.session_state._password = password
                 assets = get_assets(base_url, token)
                 st.session_state.assets   = assets
                 st.session_state.points   = []
@@ -824,595 +1078,1023 @@ if not st.session_state.token:
 
 
 # ─────────────────────────────────────────────
-# ASSETS
+# TABS
 # ─────────────────────────────────────────────
-assets = st.session_state.assets
+tab_monitor, tab_imx = st.tabs([
+    "📈  Monitor de Pontos",
+    "🔬  IMx-1 Comissionamento",
+])
 
-st.markdown('<div class="section-title">Assets — Máquinas Cadastradas</div>', unsafe_allow_html=True)
+# ══════════════════════════════════════════════
+# TAB 1 — MONITOR DE PONTOS
+# ══════════════════════════════════════════════
+with tab_monitor:
 
-# Tabela de assets
-rows_html = ""
-for a in assets:
-    badge = status_badge(a.get("Status", []))
-    rows_html += f"""
-    <tr>
-        <td><span class="id-chip">{a['ID']}</span></td>
-        <td><strong>{a['Name']}</strong></td>
-        <td style="font-size:0.82rem;color:#8b949e;">{a.get('Description','—')}</td>
-        <td style="font-size:0.78rem;font-family:'Share Tech Mono',monospace;color:#484f58;">{a.get('Path','—')}</td>
-        <td>{badge}</td>
-    </tr>"""
+    # ─────────────────────────────────────────
+    # ASSETS
+    # ─────────────────────────────────────────
+    assets = st.session_state.assets
+    st.markdown('<div class="section-title">Assets — Máquinas Cadastradas</div>', unsafe_allow_html=True)
 
-st.markdown(f"""
-<table class="data-table">
-    <thead><tr>
-        <th>ID</th><th>Nome</th><th>Descrição</th><th>Path</th><th>Status</th>
-    </tr></thead>
-    <tbody>{rows_html}</tbody>
-</table>
-""", unsafe_allow_html=True)
-
-# Seleção de asset
-st.markdown("<br>", unsafe_allow_html=True)
-col_sel, col_btn = st.columns([3, 1])
-with col_sel:
-    asset_options = {f"[{a['ID']}]  {a['Name']}": a for a in assets}
-    chosen_asset_label = st.selectbox(
-        "Selecionar Asset",
-        options=list(asset_options.keys()),
-        index=0,
-        label_visibility="visible",
-    )
-with col_btn:
-    st.markdown("<br>", unsafe_allow_html=True)
-    load_points = st.button("⟶  Carregar Points", use_container_width=True)
-
-if load_points:
-    selected_asset = asset_options[chosen_asset_label]
-    st.session_state.selected_asset = selected_asset
-    st.session_state.trend_df       = None
-    st.session_state.spectrum_data  = None
-    st.session_state.selected_point = None
-    with st.spinner(f"Carregando points de [{selected_asset['ID']}] {selected_asset['Name']}..."):
-        try:
-            pts = get_points(st.session_state.base_url, st.session_state.token, selected_asset["ID"])
-            st.session_state.points = pts
-        except Exception as e:
-            st.error(f"Erro ao carregar points: {e}")
-
-# ─────────────────────────────────────────────
-# POINTS
-# ─────────────────────────────────────────────
-if st.session_state.points:
-    points = st.session_state.points
-    asset  = st.session_state.selected_asset
-
-    st.markdown(f'<div class="section-title">Points — {asset["Name"]}</div>', unsafe_allow_html=True)
-
-    # Cards de resumo
-    st.markdown(f"""
-    <div class="metric-row">
-        <div class="metric-card">
-            <div class="label">Total de Points</div>
-            <div class="value">{len(points)}</div>
-            <div class="unit">pontos de medição</div>
-        </div>
-        <div class="metric-card ok">
-            <div class="label">Asset ID</div>
-            <div class="value">{asset['ID']}</div>
-            <div class="unit">{asset['Name']}</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">Status</div>
-            <div class="value" style="font-size:1.2rem;margin-top:4px;">
-                {"✅ OK" if not asset.get("Status") or asset["Status"][0]==0 else "⚠ Alerta"}
-            </div>
-            <div class="unit">{asset.get('Path','')}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Tabela de points
+    # Tabela de assets
     rows_html = ""
-    for p in points:
-        unit  = p.get("unit",  p.get("Unit",  "—"))
-        ptype = p.get("type",  p.get("Type",  "—"))
-        pname = p.get("name",  p.get("Name",  "—"))
-        pid   = p.get("id",    p.get("ID",    "—"))
+    for a in assets:
+        badge = status_badge(a.get("Status", []))
         rows_html += f"""
         <tr>
-            <td><span class="id-chip">{pid}</span></td>
-            <td><strong>{pname}</strong></td>
-            <td style="font-size:0.82rem;color:#8b949e;">{ptype}</td>
-            <td style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:#00d9ff;">{unit}</td>
+            <td><span class="id-chip">{a['ID']}</span></td>
+            <td><strong>{a['Name']}</strong></td>
+            <td style="font-size:0.82rem;color:#8b949e;">{a.get('Description','—')}</td>
+            <td style="font-size:0.78rem;font-family:'Share Tech Mono',monospace;color:#484f58;">{a.get('Path','—')}</td>
+            <td>{badge}</td>
         </tr>"""
 
     st.markdown(f"""
     <table class="data-table">
-        <thead><tr><th>ID</th><th>Nome do Point</th><th>Tipo</th><th>Unidade</th></tr></thead>
+        <thead><tr>
+            <th>ID</th><th>Nome</th><th>Descrição</th><th>Path</th><th>Status</th>
+        </tr></thead>
         <tbody>{rows_html}</tbody>
     </table>
     """, unsafe_allow_html=True)
 
-    # Seleção de point
+    # Seleção de asset
     st.markdown("<br>", unsafe_allow_html=True)
-    col_pt, col_btn2, col_btn3 = st.columns([3, 1, 1])
-    point_opts = {f"[{p.get('id',p.get('ID'))}]  {p.get('name',p.get('Name','?'))}": p for p in points}
-
-    with col_pt:
-        chosen_point_label = st.selectbox(
-            "Selecionar Point",
-            options=list(point_opts.keys()),
+    col_sel, col_btn = st.columns([3, 1])
+    with col_sel:
+        asset_options = {f"[{a['ID']}]  {a['Name']}": a for a in assets}
+        chosen_asset_label = st.selectbox(
+            "Selecionar Asset",
+            options=list(asset_options.keys()),
+            index=0,
             label_visibility="visible",
         )
-    with col_btn2:
+    with col_btn:
         st.markdown("<br>", unsafe_allow_html=True)
-        load_trend = st.button("📈  Carregar Tendência", use_container_width=True)
-    with col_btn3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        load_spectrum = st.button("〜  Carregar Espectro", use_container_width=True)
+        load_points = st.button("⟶  Carregar Points", use_container_width=True)
 
-    if load_trend:
-        pt = point_opts[chosen_point_label]
-        st.session_state.selected_point = pt
+    if load_points:
+        selected_asset = asset_options[chosen_asset_label]
+        st.session_state.selected_asset = selected_asset
+        st.session_state.trend_df       = None
         st.session_state.spectrum_data  = None
-        pid = pt.get("id", pt.get("ID"))
-
-        from_dt = st.session_state.get("date_from")
-        to_dt   = st.session_state.get("date_to")
-        max_r   = st.session_state.get("max_read", 500)
-        from_str = f"{from_dt}T00:00:00Z" if from_dt else None
-        to_str   = f"{to_dt}T23:59:59Z"   if to_dt   else None
-
-        with st.spinner(f"Buscando dados de tendência para point [{pid}]..."):
+        st.session_state.selected_point = None
+        with st.spinner(f"Carregando points de [{selected_asset['ID']}] {selected_asset['Name']}..."):
             try:
-                raw = get_trend(st.session_state.base_url, st.session_state.token,
-                                pid, from_str, to_str, max_r)
-                df  = parse_trend(raw)
-                st.session_state.trend_df = df
+                pts = get_points(st.session_state.base_url, st.session_state.token, selected_asset["ID"])
+                st.session_state.points = pts
             except Exception as e:
-                st.error(f"Erro ao buscar trend: {e}")
+                st.error(f"Erro ao carregar points: {e}")
 
-    if load_spectrum:
-        pt = point_opts[chosen_point_label]
-        st.session_state.selected_point = pt
-        pid = pt.get("id", pt.get("ID"))
+    # ─────────────────────────────────────────────
+    # POINTS
+    # ─────────────────────────────────────────────
+    if st.session_state.points:
+        points = st.session_state.points
+        asset  = st.session_state.selected_asset
 
-        with st.spinner(f"Buscando espectro de vibração para point [{pid}]..."):
-            try:
-                raw_spec = get_spectrum(st.session_state.base_url, st.session_state.token, pid)
-                channels_spec = parse_spectrum(raw_spec)
-                st.session_state.spectrum_data = channels_spec
-                if not channels_spec:
-                    st.warning("⚠ Nenhum dado de espectro disponível para este ponto.")
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 404:
-                    st.warning("⚠ Este ponto não possui medições dinâmicas (espectro) disponíveis.")
-                else:
-                    st.error(f"Erro HTTP ao buscar espectro: {e}")
-            except Exception as e:
-                st.error(f"Erro ao buscar espectro: {e}")
+        st.markdown(f'<div class="section-title">Points — {asset["Name"]}</div>', unsafe_allow_html=True)
 
-
-# ─────────────────────────────────────────────
-# TREND PLOT
-# ─────────────────────────────────────────────
-if st.session_state.trend_df is not None:
-    df_all = st.session_state.trend_df
-    point  = st.session_state.selected_point
-    asset  = st.session_state.selected_asset
-
-    pname = point.get("name", point.get("Name", "—"))
-    pid   = point.get("id",   point.get("ID",   "—"))
-
-    st.markdown(f'<div class="section-title">Tendência — {pname}</div>', unsafe_allow_html=True)
-
-    if df_all.empty:
-        st.markdown("""
-        <div class="alert-warn">⚠ Nenhuma leitura encontrada para o período selecionado.</div>
-        """, unsafe_allow_html=True)
-    else:
-        # ── Seletor de canal (quando há múltiplos channels) ─────────
-        channel_opts = get_channel_options(df_all)
-
-        if len(channel_opts) > 1:
-            chosen_ch_label = st.selectbox(
-                "Canal de medição",
-                options=list(channel_opts.keys()),
-                label_visibility="visible",
-            )
-            selected_ch = channel_opts[chosen_ch_label]
-        else:
-            selected_ch = list(channel_opts.values())[0] if channel_opts else 1
-
-        # Filtra pelo canal selecionado
-        df = df_all[df_all["channel"] == selected_ch].copy()
-
-        unit         = df["unit"].iloc[-1]         if not df.empty else ""
-        channel_name = df["channel_name"].iloc[-1]  if not df.empty else "Overall"
-        direction    = df["direction"].iloc[-1]      if not df.empty else ""
-
-        # ── Estatísticas ─────────────────────────
-        media   = df["value"].mean()
-        desvio  = df["value"].std()
-        vmin    = df["value"].min()
-        vmax    = df["value"].max()
-        vlast   = df["value"].iloc[-1]
-        l_alert = media + 2 * desvio
-        l_alarm = media + 3 * desvio
-
-        in_alarm   = vlast >= l_alarm
-        in_alert   = vlast >= l_alert and not in_alarm
-        card_class = "danger" if in_alarm else ("warn" if in_alert else "ok")
-
-        # Velocidade e processo (se disponíveis)
-        has_speed = "speed" in df.columns and df["speed"].notna().any()
-        speed_last = df["speed"].iloc[-1] if has_speed else None
-
+        # Cards de resumo
         st.markdown(f"""
         <div class="metric-row">
-            <div class="metric-card {card_class}">
-                <div class="label">Última Leitura</div>
-                <div class="value">{vlast:.4f}</div>
-                <div class="unit">{unit}  ·  {df['timestamp'].iloc[-1].strftime('%d/%m/%Y %H:%M')}</div>
+            <div class="metric-card">
+                <div class="label">Total de Points</div>
+                <div class="value">{len(points)}</div>
+                <div class="unit">pontos de medição</div>
+            </div>
+            <div class="metric-card ok">
+                <div class="label">Asset ID</div>
+                <div class="value">{asset['ID']}</div>
+                <div class="unit">{asset['Name']}</div>
             </div>
             <div class="metric-card">
-                <div class="label">Média</div>
-                <div class="value">{media:.4f}</div>
-                <div class="unit">{unit}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">Desvio Padrão</div>
-                <div class="value">{desvio:.4f}</div>
-                <div class="unit">σ</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">Mínimo / Máximo</div>
-                <div class="value">{vmin:.3f}</div>
-                <div class="unit">min  ·  máx  {vmax:.3f} {unit}</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">Leituras</div>
-                <div class="value">{len(df)}</div>
-                <div class="unit">pontos no período</div>
-            </div>
-            <div class="metric-card">
-                <div class="label">Velocidade (última)</div>
-                <div class="value">{speed_last:.1f}</div>
-                <div class="unit">RPM</div>
+                <div class="label">Status</div>
+                <div class="value" style="font-size:1.2rem;margin-top:4px;">
+                    {"✅ OK" if not asset.get("Status") or asset["Status"][0]==0 else "⚠ Alerta"}
+                </div>
+                <div class="unit">{asset.get('Path','')}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        if in_alarm:
-            st.markdown(f'<div class="alert-danger">🚨 ALARME — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+3σ ({l_alarm:.4f})</div>',
-                        unsafe_allow_html=True)
-        elif in_alert:
-            st.markdown(f'<div class="alert-warn">⚠ ALERTA — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+2σ ({l_alert:.4f})</div>',
-                        unsafe_allow_html=True)
+        # Tabela de points
+        rows_html = ""
+        for p in points:
+            unit  = p.get("unit",  p.get("Unit",  "—"))
+            ptype = p.get("type",  p.get("Type",  "—"))
+            pname = p.get("name",  p.get("Name",  "—"))
+            pid   = p.get("id",    p.get("ID",    "—"))
+            rows_html += f"""
+            <tr>
+                <td><span class="id-chip">{pid}</span></td>
+                <td><strong>{pname}</strong></td>
+                <td style="font-size:0.82rem;color:#8b949e;">{ptype}</td>
+                <td style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:#00d9ff;">{unit}</td>
+            </tr>"""
+
+        st.markdown(f"""
+        <table class="data-table">
+            <thead><tr><th>ID</th><th>Nome do Point</th><th>Tipo</th><th>Unidade</th></tr></thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+        """, unsafe_allow_html=True)
+
+        # Seleção de point
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_pt, col_btn2, col_btn3 = st.columns([3, 1, 1])
+        point_opts = {f"[{p.get('id',p.get('ID'))}]  {p.get('name',p.get('Name','?'))}": p for p in points}
+
+        with col_pt:
+            chosen_point_label = st.selectbox(
+                "Selecionar Point",
+                options=list(point_opts.keys()),
+                label_visibility="visible",
+            )
+        with col_btn2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            load_trend = st.button("📈  Carregar Tendência", use_container_width=True)
+        with col_btn3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            load_spectrum = st.button("〜  Carregar Espectro", use_container_width=True)
+
+        if load_trend:
+            pt = point_opts[chosen_point_label]
+            st.session_state.selected_point = pt
+            st.session_state.spectrum_data  = None
+            pid = pt.get("id", pt.get("ID"))
+
+            from_dt = st.session_state.get("date_from")
+            to_dt   = st.session_state.get("date_to")
+            max_r   = st.session_state.get("max_read", 500)
+            from_str = f"{from_dt}T00:00:00Z" if from_dt else None
+            to_str   = f"{to_dt}T23:59:59Z"   if to_dt   else None
+
+            with st.spinner(f"Buscando dados de tendência para point [{pid}]..."):
+                try:
+                    raw = get_trend(st.session_state.base_url, st.session_state.token,
+                                    pid, from_str, to_str, max_r)
+                    df  = parse_trend(raw)
+                    st.session_state.trend_df = df
+                except Exception as e:
+                    st.error(f"Erro ao buscar trend: {e}")
+
+        if load_spectrum:
+            pt = point_opts[chosen_point_label]
+            st.session_state.selected_point = pt
+            pid = pt.get("id", pt.get("ID"))
+
+            with st.spinner(f"Buscando espectro de vibração para point [{pid}]..."):
+                try:
+                    raw_spec = get_spectrum(st.session_state.base_url, st.session_state.token, pid)
+                    channels_spec = parse_spectrum(raw_spec)
+                    st.session_state.spectrum_data = channels_spec
+                    if not channels_spec:
+                        st.warning("⚠ Nenhum dado de espectro disponível para este ponto.")
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 404:
+                        st.warning("⚠ Este ponto não possui medições dinâmicas (espectro) disponíveis.")
+                    else:
+                        st.error(f"Erro HTTP ao buscar espectro: {e}")
+                except Exception as e:
+                    st.error(f"Erro ao buscar espectro: {e}")
+
+
+    # ─────────────────────────────────────────────
+    # TREND PLOT
+    # ─────────────────────────────────────────────
+    if st.session_state.trend_df is not None:
+        df_all = st.session_state.trend_df
+        point  = st.session_state.selected_point
+        asset  = st.session_state.selected_asset
+
+        pname = point.get("name", point.get("Name", "—"))
+        pid   = point.get("id",   point.get("ID",   "—"))
+
+        st.markdown(f'<div class="section-title">Tendência — {pname}</div>', unsafe_allow_html=True)
+
+        if df_all.empty:
+            st.markdown("""
+            <div class="alert-warn">⚠ Nenhuma leitura encontrada para o período selecionado.</div>
+            """, unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="alert-ok">✔ NORMAL — Leitura dentro dos limites esperados.</div>',
-                        unsafe_allow_html=True)
+            # ── Seletor de canal (quando há múltiplos channels) ─────────
+            channel_opts = get_channel_options(df_all)
 
-        # ── Plotly Chart ──────────────────────────
-        ch_title = f"{channel_name}"
-        if direction:
-            ch_title += f" [{direction}]"
+            if len(channel_opts) > 1:
+                chosen_ch_label = st.selectbox(
+                    "Canal de medição",
+                    options=list(channel_opts.keys()),
+                    label_visibility="visible",
+                )
+                selected_ch = channel_opts[chosen_ch_label]
+            else:
+                selected_ch = list(channel_opts.values())[0] if channel_opts else 1
 
-        fig = go.Figure()
+            # Filtra pelo canal selecionado
+            df = df_all[df_all["channel"] == selected_ch].copy()
 
-        # Área sombreada
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"], y=df["value"],
+            unit         = df["unit"].iloc[-1]         if not df.empty else ""
+            channel_name = df["channel_name"].iloc[-1]  if not df.empty else "Overall"
+            direction    = df["direction"].iloc[-1]      if not df.empty else ""
+
+            # ── Estatísticas ─────────────────────────
+            media   = df["value"].mean()
+            desvio  = df["value"].std()
+            vmin    = df["value"].min()
+            vmax    = df["value"].max()
+            vlast   = df["value"].iloc[-1]
+            l_alert = media + 2 * desvio
+            l_alarm = media + 3 * desvio
+
+            in_alarm   = vlast >= l_alarm
+            in_alert   = vlast >= l_alert and not in_alarm
+            card_class = "danger" if in_alarm else ("warn" if in_alert else "ok")
+
+            # Velocidade e processo (se disponíveis)
+            has_speed = "speed" in df.columns and df["speed"].notna().any()
+            speed_last = df["speed"].iloc[-1] if has_speed else None
+
+            st.markdown(f"""
+            <div class="metric-row">
+                <div class="metric-card {card_class}">
+                    <div class="label">Última Leitura</div>
+                    <div class="value">{vlast:.4f}</div>
+                    <div class="unit">{unit}  ·  {df['timestamp'].iloc[-1].strftime('%d/%m/%Y %H:%M')}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Média</div>
+                    <div class="value">{media:.4f}</div>
+                    <div class="unit">{unit}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Desvio Padrão</div>
+                    <div class="value">{desvio:.4f}</div>
+                    <div class="unit">σ</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Mínimo / Máximo</div>
+                    <div class="value">{vmin:.3f}</div>
+                    <div class="unit">min  ·  máx  {vmax:.3f} {unit}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Leituras</div>
+                    <div class="value">{len(df)}</div>
+                    <div class="unit">pontos no período</div>
+                </div>
+                {"" if not has_speed else f'''
+                <div class="metric-card">
+                    <div class="label">Velocidade (última)</div>
+                    <div class="value">{speed_last:.1f}</div>
+                    <div class="unit">RPM</div>
+                </div>'''}
+            </div>
+            """, unsafe_allow_html=True)
+
+            if in_alarm:
+                st.markdown(f'<div class="alert-danger">🚨 ALARME — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+3σ ({l_alarm:.4f})</div>',
+                            unsafe_allow_html=True)
+            elif in_alert:
+                st.markdown(f'<div class="alert-warn">⚠ ALERTA — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+2σ ({l_alert:.4f})</div>',
+                            unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="alert-ok">✔ NORMAL — Leitura dentro dos limites esperados.</div>',
+                            unsafe_allow_html=True)
+
+            # ── Plotly Chart ──────────────────────────
+            ch_title = f"{channel_name}"
+            if direction:
+                ch_title += f" [{direction}]"
+
+            fig = go.Figure()
+
+            # Área sombreada
+            fig.add_trace(go.Scatter(
+                x=df["timestamp"], y=df["value"],
+                fill="tozeroy",
+                fillcolor="rgba(0,217,255,0.04)",
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+
+            # Banda ±1σ
+            fig.add_trace(go.Scatter(
+                x=pd.concat([df["timestamp"], df["timestamp"][::-1]]),
+                y=pd.concat([
+                    pd.Series([media + desvio] * len(df)),
+                    pd.Series([media - desvio] * len(df))[::-1],
+                ]),
+                fill="toself",
+                fillcolor="rgba(46,213,115,0.05)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="±1σ (normal)",
+                hoverinfo="skip",
+            ))
+
+            # Linha principal de leitura
+            fig.add_trace(go.Scatter(
+                x=df["timestamp"], y=df["value"],
+                mode="lines+markers",
+                name=f"{ch_title}",
+                line=dict(color="#00d9ff", width=2),
+                marker=dict(size=5, color="#00d9ff", opacity=0.8),
+                hovertemplate=(
+                    "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>"
+                    f"<b>{ch_title}:</b> %{{y:.4f}} {unit}<extra></extra>"
+                ),
+            ))
+
+            # Linha de velocidade (eixo secundário, se disponível)
+            if has_speed and df["speed"].notna().any():
+                fig.add_trace(go.Scatter(
+                    x=df["timestamp"], y=df["speed"],
+                    mode="lines",
+                    name="Velocidade (RPM)",
+                    line=dict(color="#a855f7", width=1, dash="dot"),
+                    yaxis="y2",
+                    hovertemplate="<b>Velocidade:</b> %{y:.1f} RPM<extra></extra>",
+                    opacity=0.7,
+                ))
+
+            # Linhas de referência
+            fig.add_hline(y=media, line=dict(color="#2ed573", width=1.5, dash="dash"),
+                          annotation_text=f"Média  {media:.4f}", annotation_font_color="#2ed573",
+                          annotation_position="top right")
+            fig.add_hline(y=l_alert, line=dict(color="#f0a500", width=1.2, dash="dot"),
+                          annotation_text=f"Alerta  {l_alert:.4f}", annotation_font_color="#f0a500",
+                          annotation_position="top right")
+            fig.add_hline(y=l_alarm, line=dict(color="#ff4757", width=1.2, dash="dot"),
+                          annotation_text=f"Alarme  {l_alarm:.4f}", annotation_font_color="#ff4757",
+                          annotation_position="top right")
+
+            layout_extra = {}
+            if has_speed:
+                layout_extra["yaxis2"] = dict(
+                    title=dict(text="Velocidade [RPM]", font=dict(color="#a855f7", size=10)),
+                    overlaying="y", side="right",
+                    gridcolor="rgba(0,0,0,0)",
+                    tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
+                )
+
+            fig.update_layout(
+                paper_bgcolor="#090c10",
+                plot_bgcolor="#0d1117",
+                font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
+                title=dict(
+                    text=f"<b>{pname}</b>  ·  {asset['Name']}  ·  <span style='color:#00d9ff'>{ch_title}</span>",
+                    font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
+                    x=0.01,
+                ),
+                xaxis=dict(
+                    gridcolor="#21262d", zeroline=False,
+                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                    title=dict(text="Data / Hora (UTC)", font=dict(color="#8b949e", size=11)),
+                    rangeslider=dict(visible=True, bgcolor="#0d1117", thickness=0.06),
+                ),
+                yaxis=dict(
+                    gridcolor="#21262d", zeroline=False,
+                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                    title=dict(text=f"{ch_title}  [{unit}]", font=dict(color="#8b949e", size=11)),
+                ),
+                legend=dict(
+                    bgcolor="rgba(13,17,23,0.8)", bordercolor="#21262d", borderwidth=1,
+                    font=dict(family="Exo 2, sans-serif", size=11, color="#c9d1d9"),
+                    orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                ),
+                hovermode="x unified",
+                margin=dict(l=60, r=60, t=70, b=60),
+                height=500,
+                **layout_extra,
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ── Tabela de dados brutos ───────────────
+            with st.expander("🗃  Ver dados brutos"):
+                df_show = df[["timestamp", "value", "unit", "channel_name",
+                              "direction", "speed", "process"]].copy()
+                df_show["timestamp"] = df_show["timestamp"].dt.strftime("%d/%m/%Y %H:%M:%S")
+                df_show.columns = [
+                    "Data/Hora (UTC)", "Level", "Unidade",
+                    "Canal", "Direção", "Velocidade (RPM)", "Processo",
+                ]
+                st.dataframe(df_show, use_container_width=True, hide_index=True, height=300)
+
+                csv = df_show.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇  Exportar CSV",
+                    data=csv,
+                    file_name=f"trend_{pid}_ch{selected_ch}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                )
+
+
+    # ─────────────────────────────────────────────
+    # SPECTRUM PLOT
+    # ─────────────────────────────────────────────
+    if st.session_state.spectrum_data:
+        channels_spec = st.session_state.spectrum_data
+        point  = st.session_state.selected_point
+        pname  = point.get("name", point.get("Name", "—")) if point else "—"
+        pid    = point.get("id",   point.get("ID",   "—")) if point else "—"
+
+        st.markdown(f'<div class="section-title">Espectro de Vibração — {pname}</div>',
+                    unsafe_allow_html=True)
+
+        # ── Info cards do espectro ──────────────────
+        first = channels_spec[0]
+        speed_val = first.get("speed", 0.0)
+        n_ch = len(channels_spec)
+
+        st.markdown(f"""
+        <div class="metric-row">
+            <div class="metric-card">
+                <div class="label">Canais</div>
+                <div class="value">{n_ch}</div>
+                <div class="unit">direções medidas</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Faixa de Frequência</div>
+                <div class="value">{first['end_freq']:.0f}</div>
+                <div class="unit">{first['start_freq']:.0f} – {first['end_freq']:.0f} Hz</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Taxa de Amostragem</div>
+                <div class="value">{first['sample_rate']:.0f}</div>
+                <div class="unit">Hz · {first['samples']} amostras</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Unidade</div>
+                <div class="value" style="font-size:1.3rem;margin-top:6px;">{first['eu']}</div>
+                <div class="unit">amplitude</div>
+            </div>
+            {"" if speed_val == 0.0 else f'''
+            <div class="metric-card">
+                <div class="label">Velocidade</div>
+                <div class="value">{speed_val:.1f}</div>
+                <div class="unit">{first["speed_units"]}</div>
+            </div>'''}
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Seletor de canal (se múltiplos) ────────
+        DIRECTION_MAP = {0: "X", 1: "Y", 2: "Z", 3: "H", 4: "V", 5: "A", -1: "—"}
+        MTYPE_MAP     = {0: "Waveform", 1: "Espectro (velocidade)", 2: "Espectro", 3: "Cepstrum"}
+
+        ch_labels = []
+        for i, ch in enumerate(channels_spec):
+            dir_str  = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
+            mtype_str = MTYPE_MAP.get(ch["mtype"], f"Tipo {ch['mtype']}")
+            ch_labels.append(f"Canal {i+1}  [{dir_str}]  — {mtype_str}")
+
+        if len(ch_labels) > 1:
+            sel_ch_label = st.selectbox("Canal do espectro", options=ch_labels, key="spec_ch_sel")
+            sel_ch_idx = ch_labels.index(sel_ch_label)
+        else:
+            sel_ch_idx = 0
+
+        ch = channels_spec[sel_ch_idx]
+        freqs  = ch["freqs"]
+        values = ch["values"]
+        eu     = ch["eu"]
+        dir_str = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
+
+        # ── Picos principais (top 10) ───────────────
+        peak_indices = np.argsort(values)[::-1][:10]
+        peak_freqs   = freqs[peak_indices]
+        peak_vals    = values[peak_indices]
+
+        # ── Frequência de rotação (1X, 2X, 3X) ──────
+        harmonic_lines = []
+        if speed_val and speed_val > 0:
+            rpm_hz = speed_val / 60.0
+            for h in range(1, 6):
+                hf = rpm_hz * h
+                if ch["start_freq"] <= hf <= ch["end_freq"]:
+                    harmonic_lines.append((hf, f"{h}X  {hf:.1f} Hz"))
+
+        # ── Plotly ──────────────────────────────────
+        fig_spec = go.Figure()
+
+        # Área preenchida sob o espectro
+        fig_spec.add_trace(go.Scatter(
+            x=freqs, y=values,
             fill="tozeroy",
-            fillcolor="rgba(0,217,255,0.04)",
+            fillcolor="rgba(0,217,255,0.06)",
             line=dict(color="rgba(0,0,0,0)"),
             showlegend=False, hoverinfo="skip",
         ))
 
-        # Banda ±1σ
-        fig.add_trace(go.Scatter(
-            x=pd.concat([df["timestamp"], df["timestamp"][::-1]]),
-            y=pd.concat([
-                pd.Series([media + desvio] * len(df)),
-                pd.Series([media - desvio] * len(df))[::-1],
-            ]),
-            fill="toself",
-            fillcolor="rgba(46,213,115,0.05)",
-            line=dict(color="rgba(0,0,0,0)"),
-            name="±1σ (normal)",
-            hoverinfo="skip",
+        # Linha do espectro
+        fig_spec.add_trace(go.Scatter(
+            x=freqs, y=values,
+            mode="lines",
+            name=f"Espectro [{dir_str}]",
+            line=dict(color="#00d9ff", width=1.5),
+            hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.4f} " + eu + "<extra></extra>",
         ))
 
-        # Linha principal de leitura
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"], y=df["value"],
-            mode="lines+markers",
-            name=f"{ch_title}",
-            line=dict(color="#00d9ff", width=2),
-            marker=dict(size=5, color="#00d9ff", opacity=0.8),
-            hovertemplate=(
-                "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>"
-                f"<b>{ch_title}:</b> %{{y:.4f}} {unit}<extra></extra>"
-            ),
+        # Marcadores de picos
+        fig_spec.add_trace(go.Scatter(
+            x=peak_freqs, y=peak_vals,
+            mode="markers+text",
+            name="Picos",
+            marker=dict(size=8, color="#f0a500", symbol="triangle-up",
+                        line=dict(color="#f0a500", width=1)),
+            text=[f"{f:.1f}" for f in peak_freqs],
+            textposition="top center",
+            textfont=dict(family="Share Tech Mono, monospace", size=9, color="#f0a500"),
+            hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.5f} " + eu + "<extra>Pico</extra>",
         ))
 
-        # Linha de velocidade (eixo secundário, se disponível)
-        if has_speed and df["speed"].notna().any():
-            fig.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["speed"],
-                mode="lines",
-                name="Velocidade (RPM)",
-                line=dict(color="#a855f7", width=1, dash="dot"),
-                yaxis="y2",
-                hovertemplate="<b>Velocidade:</b> %{y:.1f} RPM<extra></extra>",
-                opacity=0.7,
-            ))
-
-        # Linhas de referência
-        fig.add_hline(y=media, line=dict(color="#2ed573", width=1.5, dash="dash"),
-                      annotation_text=f"Média  {media:.4f}", annotation_font_color="#2ed573",
-                      annotation_position="top right")
-        fig.add_hline(y=l_alert, line=dict(color="#f0a500", width=1.2, dash="dot"),
-                      annotation_text=f"Alerta  {l_alert:.4f}", annotation_font_color="#f0a500",
-                      annotation_position="top right")
-        fig.add_hline(y=l_alarm, line=dict(color="#ff4757", width=1.2, dash="dot"),
-                      annotation_text=f"Alarme  {l_alarm:.4f}", annotation_font_color="#ff4757",
-                      annotation_position="top right")
-
-        layout_extra = {}
-        if has_speed:
-            layout_extra["yaxis2"] = dict(
-                title=dict(text="Velocidade [RPM]", font=dict(color="#a855f7", size=10)),
-                overlaying="y", side="right",
-                gridcolor="rgba(0,0,0,0)",
-                tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
+        # Linhas harmônicas de rotação
+        for hf, hlabel in harmonic_lines:
+            fig_spec.add_vline(
+                x=hf,
+                line=dict(color="rgba(168,85,247,0.6)", width=1, dash="dot"),
+                annotation_text=hlabel,
+                annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
+                annotation_position="top",
             )
 
-        fig.update_layout(
+        fig_spec.update_layout(
             paper_bgcolor="#090c10",
             plot_bgcolor="#0d1117",
             font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
             title=dict(
-                text=f"<b>{pname}</b>  ·  {asset['Name']}  ·  <span style='color:#00d9ff'>{ch_title}</span>",
+                text=(f"<b>{pname}</b>  ·  Espectro  ·  "
+                      f"<span style='color:#00d9ff'>Direção {dir_str}</span>  ·  "
+                      f"<span style='color:#8b949e'>{eu}</span>"),
                 font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
                 x=0.01,
             ),
             xaxis=dict(
                 gridcolor="#21262d", zeroline=False,
                 tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
-                title=dict(text="Data / Hora (UTC)", font=dict(color="#8b949e", size=11)),
+                title=dict(text="Frequência [Hz]", font=dict(color="#8b949e", size=11)),
                 rangeslider=dict(visible=True, bgcolor="#0d1117", thickness=0.06),
             ),
             yaxis=dict(
                 gridcolor="#21262d", zeroline=False,
                 tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
-                title=dict(text=f"{ch_title}  [{unit}]", font=dict(color="#8b949e", size=11)),
+                title=dict(text=f"Amplitude  [{eu}]", font=dict(color="#8b949e", size=11)),
             ),
             legend=dict(
                 bgcolor="rgba(13,17,23,0.8)", bordercolor="#21262d", borderwidth=1,
                 font=dict(family="Exo 2, sans-serif", size=11, color="#c9d1d9"),
                 orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
             ),
-            hovermode="x unified",
-            margin=dict(l=60, r=60, t=70, b=60),
-            height=500,
-            **layout_extra,
+            hovermode="x",
+            margin=dict(l=60, r=40, t=70, b=60),
+            height=450,
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_spec, use_container_width=True)
 
-        # ── Tabela de dados brutos ───────────────
-        with st.expander("🗃  Ver dados brutos"):
-            df_show = df[["timestamp", "value", "unit", "channel_name",
-                          "direction", "speed", "process"]].copy()
-            df_show["timestamp"] = df_show["timestamp"].dt.strftime("%d/%m/%Y %H:%M:%S")
-            df_show.columns = [
-                "Data/Hora (UTC)", "Level", "Unidade",
-                "Canal", "Direção", "Velocidade (RPM)", "Processo",
-            ]
-            st.dataframe(df_show, use_container_width=True, hide_index=True, height=300)
+        # ── Tabela de picos ──────────────────────────
+        with st.expander("📊  Top 10 picos do espectro"):
+            df_peaks = pd.DataFrame({
+                "Frequência (Hz)": [f"{f:.3f}" for f in peak_freqs],
+                f"Amplitude ({eu})": [f"{v:.5f}" for v in peak_vals],
+                "Rank": [f"#{i+1}" for i in range(len(peak_freqs))],
+            })
+            st.dataframe(df_peaks, use_container_width=True, hide_index=True)
 
-            csv = df_show.to_csv(index=False).encode("utf-8")
+            csv_spec = df_peaks.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "⬇  Exportar CSV",
-                data=csv,
-                file_name=f"trend_{pid}_ch{selected_ch}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                "⬇  Exportar picos CSV",
+                data=csv_spec,
+                file_name=f"spectrum_peaks_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+
+        # ── Exportar espectro completo ───────────────
+        with st.expander("🗃  Ver espectro completo (dados brutos)"):
+            df_full_spec = pd.DataFrame({
+                "Frequência (Hz)": np.round(freqs, 4),
+                f"Amplitude ({eu})": np.round(values, 6),
+            })
+            st.dataframe(df_full_spec, use_container_width=True, hide_index=True, height=300)
+
+            csv_full = df_full_spec.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Exportar espectro completo CSV",
+                data=csv_full,
+                file_name=f"spectrum_full_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
 
 
-# ─────────────────────────────────────────────
-# SPECTRUM PLOT
-# ─────────────────────────────────────────────
-if st.session_state.spectrum_data:
-    channels_spec = st.session_state.spectrum_data
-    point  = st.session_state.selected_point
-    pname  = point.get("name", point.get("Name", "—")) if point else "—"
-    pid    = point.get("id",   point.get("ID",   "—")) if point else "—"
+# ══════════════════════════════════════════════
+# TAB 2 — IMx-1 COMISSIONAMENTO
+# ══════════════════════════════════════════════
+with tab_imx:
 
-    st.markdown(f'<div class="section-title">Espectro de Vibração — {pname}</div>',
+    st.markdown('<div class="section-title">Varredura IMx-1 — Data de Comissionamento</div>',
                 unsafe_allow_html=True)
 
-    # ── Info cards do espectro ──────────────────
-    first = channels_spec[0]
-    speed_val = first.get("speed", 0.0)
-    n_ch = len(channels_spec)
-
-    st.markdown(f"""
-    <div class="metric-row">
-        <div class="metric-card">
-            <div class="label">Canais</div>
-            <div class="value">{n_ch}</div>
-            <div class="unit">direções medidas</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">Faixa de Frequência</div>
-            <div class="value">{first['end_freq']:.0f}</div>
-            <div class="unit">{first['start_freq']:.0f} – {first['end_freq']:.0f} Hz</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">Taxa de Amostragem</div>
-            <div class="value">{first['sample_rate']:.0f}</div>
-            <div class="unit">Hz · {first['samples']} amostras</div>
-        </div>
-        <div class="metric-card">
-            <div class="label">Unidade</div>
-            <div class="value" style="font-size:1.3rem;margin-top:6px;">{first['eu']}</div>
-            <div class="unit">amplitude</div>
-        </div>
-        {"" if speed_val == 0.0 else f'''
-        <div class="metric-card">
-            <div class="label">Velocidade</div>
-            <div class="value">{speed_val:.1f}</div>
-            <div class="unit">{first["speed_units"]}</div>
-        </div>'''}
+    st.markdown("""
+    <div class="alert-info">
+        ℹ  Esta varredura percorre <strong>todos os assets</strong> da planta, identifica pontos
+        vinculados a sensores <strong>IMx-1</strong> (NodeTypes 11101–11104) e usa a
+        <em>primeira leitura de tendência ≥ 01/05/2024</em> como estimativa real de comissionamento.
+        A duração depende do número de ativos — um pequeno delay é aplicado entre chamadas.
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Seletor de canal (se múltiplos) ────────
-    DIRECTION_MAP = {0: "X", 1: "Y", 2: "Z", 3: "H", 4: "V", 5: "A", -1: "—"}
-    MTYPE_MAP     = {0: "Waveform", 1: "Espectro (velocidade)", 2: "Espectro", 3: "Cepstrum"}
-
-    ch_labels = []
-    for i, ch in enumerate(channels_spec):
-        dir_str  = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
-        mtype_str = MTYPE_MAP.get(ch["mtype"], f"Tipo {ch['mtype']}")
-        ch_labels.append(f"Canal {i+1}  [{dir_str}]  — {mtype_str}")
-
-    if len(ch_labels) > 1:
-        sel_ch_label = st.selectbox("Canal do espectro", options=ch_labels, key="spec_ch_sel")
-        sel_ch_idx = ch_labels.index(sel_ch_label)
-    else:
-        sel_ch_idx = 0
-
-    ch = channels_spec[sel_ch_idx]
-    freqs  = ch["freqs"]
-    values = ch["values"]
-    eu     = ch["eu"]
-    dir_str = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
-
-    # ── Picos principais (top 10) ───────────────
-    peak_indices = np.argsort(values)[::-1][:10]
-    peak_freqs   = freqs[peak_indices]
-    peak_vals    = values[peak_indices]
-
-    # ── Frequência de rotação (1X, 2X, 3X) ──────
-    harmonic_lines = []
-    if speed_val and speed_val > 0:
-        rpm_hz = speed_val / 60.0
-        for h in range(1, 6):
-            hf = rpm_hz * h
-            if ch["start_freq"] <= hf <= ch["end_freq"]:
-                harmonic_lines.append((hf, f"{h}X  {hf:.1f} Hz"))
-
-    # ── Plotly ──────────────────────────────────
-    fig_spec = go.Figure()
-
-    # Área preenchida sob o espectro
-    fig_spec.add_trace(go.Scatter(
-        x=freqs, y=values,
-        fill="tozeroy",
-        fillcolor="rgba(0,217,255,0.06)",
-        line=dict(color="rgba(0,0,0,0)"),
-        showlegend=False, hoverinfo="skip",
-    ))
-
-    # Linha do espectro
-    fig_spec.add_trace(go.Scatter(
-        x=freqs, y=values,
-        mode="lines",
-        name=f"Espectro [{dir_str}]",
-        line=dict(color="#00d9ff", width=1.5),
-        hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.4f} " + eu + "<extra></extra>",
-    ))
-
-    # Marcadores de picos
-    fig_spec.add_trace(go.Scatter(
-        x=peak_freqs, y=peak_vals,
-        mode="markers+text",
-        name="Picos",
-        marker=dict(size=8, color="#f0a500", symbol="triangle-up",
-                    line=dict(color="#f0a500", width=1)),
-        text=[f"{f:.1f}" for f in peak_freqs],
-        textposition="top center",
-        textfont=dict(family="Share Tech Mono, monospace", size=9, color="#f0a500"),
-        hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.5f} " + eu + "<extra>Pico</extra>",
-    ))
-
-    # Linhas harmônicas de rotação
-    for hf, hlabel in harmonic_lines:
-        fig_spec.add_vline(
-            x=hf,
-            line=dict(color="rgba(168,85,247,0.6)", width=1, dash="dot"),
-            annotation_text=hlabel,
-            annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
-            annotation_position="top",
+    # ── Botão de varredura ────────────────────────
+    col_scan, col_clear = st.columns([2, 1])
+    with col_scan:
+        run_scan = st.button(
+            "🔍  Iniciar Varredura Completa",
+            use_container_width=True,
+            type="primary",
         )
+    with col_clear:
+        if st.button("🗑  Limpar Resultado", use_container_width=True):
+            st.session_state.imx_df  = None
+            st.session_state.imx_log = []
+            st.rerun()
 
-    fig_spec.update_layout(
-        paper_bgcolor="#090c10",
-        plot_bgcolor="#0d1117",
-        font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
-        title=dict(
-            text=(f"<b>{pname}</b>  ·  Espectro  ·  "
-                  f"<span style='color:#00d9ff'>Direção {dir_str}</span>  ·  "
-                  f"<span style='color:#8b949e'>{eu}</span>"),
-            font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
-            x=0.01,
-        ),
-        xaxis=dict(
-            gridcolor="#21262d", zeroline=False,
-            tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
-            title=dict(text="Frequência [Hz]", font=dict(color="#8b949e", size=11)),
-            rangeslider=dict(visible=True, bgcolor="#0d1117", thickness=0.06),
-        ),
-        yaxis=dict(
-            gridcolor="#21262d", zeroline=False,
-            tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
-            title=dict(text=f"Amplitude  [{eu}]", font=dict(color="#8b949e", size=11)),
-        ),
-        legend=dict(
-            bgcolor="rgba(13,17,23,0.8)", bordercolor="#21262d", borderwidth=1,
-            font=dict(family="Exo 2, sans-serif", size=11, color="#c9d1d9"),
-            orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
-        ),
-        hovermode="x",
-        margin=dict(l=60, r=40, t=70, b=60),
-        height=450,
-    )
+    # ── Executa varredura ─────────────────────────
+    if run_scan:
+        pw = st.session_state.get("_password", "")
+        if not pw:
+            st.error("❌ Senha não disponível — reconecte na barra lateral.")
+        else:
+            st.session_state.imx_df  = None
+            st.session_state.imx_log = []
 
-    st.plotly_chart(fig_spec, use_container_width=True)
+            progress_bar  = st.progress(0.0, text="Iniciando varredura...")
+            log_container = st.empty()
+            log_lines     = []
 
-    # ── Tabela de picos ──────────────────────────
-    with st.expander("📊  Top 10 picos do espectro"):
-        df_peaks = pd.DataFrame({
-            "Frequência (Hz)": [f"{f:.3f}" for f in peak_freqs],
-            f"Amplitude ({eu})": [f"{v:.5f}" for v in peak_vals],
-            "Rank": [f"#{i+1}" for i in range(len(peak_freqs))],
-        })
-        st.dataframe(df_peaks, use_container_width=True, hide_index=True)
+            def _progress(val: float, text: str = ""):
+                progress_bar.progress(min(val, 1.0), text=text or "Processando...")
 
-        csv_spec = df_peaks.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇  Exportar picos CSV",
-            data=csv_spec,
-            file_name=f"spectrum_peaks_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-        )
+            def _log(msg: str):
+                log_lines.append(msg)
+                log_container.markdown(
+                    "<br>".join(f"<span style='font-family:Share Tech Mono,monospace;"
+                                f"font-size:0.75rem;color:#8b949e;'>{l}</span>"
+                                for l in log_lines[-12:]),
+                    unsafe_allow_html=True,
+                )
 
-    # ── Exportar espectro completo ───────────────
-    with st.expander("🗃  Ver espectro completo (dados brutos)"):
-        df_full_spec = pd.DataFrame({
-            "Frequência (Hz)": np.round(freqs, 4),
-            f"Amplitude ({eu})": np.round(values, 6),
-        })
-        st.dataframe(df_full_spec, use_container_width=True, hide_index=True, height=300)
+            try:
+                df_imx = run_imx_scan(
+                    st.session_state.base_url,
+                    st.session_state.username,
+                    pw,
+                    progress_cb=_progress,
+                    log_cb=_log,
+                )
+                st.session_state.imx_df  = df_imx
+                st.session_state.imx_log = log_lines
+                progress_bar.progress(1.0, text="✅ Varredura concluída")
+                log_container.empty()
+            except Exception as e:
+                st.error(f"❌ Erro durante varredura: {e}")
 
-        csv_full = df_full_spec.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇  Exportar espectro completo CSV",
-            data=csv_full,
-            file_name=f"spectrum_full_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-        )
+    # ── Resultados ────────────────────────────────
+    if st.session_state.imx_df is not None:
+        df_imx = st.session_state.imx_df
+
+        if df_imx.empty:
+            st.markdown("""
+            <div class="alert-warn">⚠ Nenhum sensor IMx-1 encontrado na planta
+            com leituras a partir de 01/05/2024.</div>
+            """, unsafe_allow_html=True)
+        else:
+            today_utc = datetime.now(timezone.utc)
+            n_total   = len(df_imx)
+            n_ok      = df_imx["ProvavelDataComissionamento"].notna().sum()
+            n_sem_bat = df_imx["BatteryLevel"].isna().sum()
+            bat_media = df_imx["BatteryLevel"].mean()
+            bat_min   = df_imx["BatteryLevel"].min()
+
+            # ── KPI cards ────────────────────────────
+            st.markdown(f"""
+            <div class="metric-row">
+                <div class="metric-card ok">
+                    <div class="label">Sensores IMx-1</div>
+                    <div class="value">{n_total}</div>
+                    <div class="unit">encontrados na planta</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Com Data de Comissionamento</div>
+                    <div class="value">{n_ok}</div>
+                    <div class="unit">de {n_total} sensores</div>
+                </div>
+                <div class="metric-card {"warn" if bat_media and bat_media < 50 else ""}">
+                    <div class="label">Bateria Média</div>
+                    <div class="value">{f"{bat_media:.1f}" if bat_media == bat_media else "—"}</div>
+                    <div class="unit">% · mín {f"{bat_min:.1f}" if bat_min == bat_min else "—"}%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Sem Info de Bateria</div>
+                    <div class="value">{n_sem_bat}</div>
+                    <div class="unit">sensores sem metadado</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ── Gráfico 1: Linha do tempo de comissionamento ──────────
+            df_plot = df_imx.dropna(subset=["ProvavelDataComissionamento"]).copy()
+            df_plot["_dt"] = pd.to_datetime(df_plot["ProvavelDataComissionamento"], utc=True, errors="coerce")
+            df_plot = df_plot.dropna(subset=["_dt"]).sort_values("_dt")
+
+            if not df_plot.empty:
+                st.markdown('<div class="section-title">Linha do Tempo — Comissionamento dos Sensores</div>',
+                            unsafe_allow_html=True)
+
+                # Agrupa por mês para histogram
+                df_plot["_mes"] = df_plot["_dt"].dt.to_period("M").dt.to_timestamp()
+                contagem_mes    = df_plot.groupby("_mes").size().reset_index(name="qtd")
+
+                fig_timeline = go.Figure()
+
+                # Barras de comissionamento por mês
+                fig_timeline.add_trace(go.Bar(
+                    x=contagem_mes["_mes"],
+                    y=contagem_mes["qtd"],
+                    name="Sensores comissionados",
+                    marker=dict(
+                        color=contagem_mes["qtd"],
+                        colorscale=[[0, "rgba(0,217,255,0.4)"], [1, "#00d9ff"]],
+                        line=dict(color="#00d9ff", width=0.5),
+                    ),
+                    hovertemplate="<b>%{x|%b/%Y}</b><br>%{y} sensor(es)<extra></extra>",
+                ))
+
+                # Acumulado como linha
+                contagem_mes["acumulado"] = contagem_mes["qtd"].cumsum()
+                fig_timeline.add_trace(go.Scatter(
+                    x=contagem_mes["_mes"],
+                    y=contagem_mes["acumulado"],
+                    mode="lines+markers",
+                    name="Acumulado",
+                    line=dict(color="#2ed573", width=2, dash="dot"),
+                    marker=dict(size=6, color="#2ed573"),
+                    yaxis="y2",
+                    hovertemplate="<b>%{x|%b/%Y}</b><br>Acumulado: %{y}<extra></extra>",
+                ))
+
+                fig_timeline.update_layout(
+                    paper_bgcolor="#090c10",
+                    plot_bgcolor="#0d1117",
+                    font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
+                    title=dict(
+                        text="<b>Comissionamento IMx-1</b>  ·  Sensores por Mês",
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(
+                        gridcolor="#21262d", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                        title=dict(text="Mês de Comissionamento", font=dict(color="#8b949e", size=11)),
+                    ),
+                    yaxis=dict(
+                        gridcolor="#21262d", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                        title=dict(text="Qtd. Sensores / Mês", font=dict(color="#8b949e", size=11)),
+                    ),
+                    yaxis2=dict(
+                        title=dict(text="Acumulado", font=dict(color="#2ed573", size=10)),
+                        overlaying="y", side="right",
+                        gridcolor="rgba(0,0,0,0)",
+                        tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#2ed573"),
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#21262d", borderwidth=1,
+                        font=dict(family="Exo 2, sans-serif", size=11, color="#c9d1d9"),
+                        orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+                    ),
+                    bargap=0.25,
+                    hovermode="x unified",
+                    margin=dict(l=60, r=70, t=70, b=60),
+                    height=400,
+                )
+                st.plotly_chart(fig_timeline, use_container_width=True)
+
+            # ── Gráfico 2: Bateria vs Dias de Uso (scatter) ───────────
+            df_bat = df_imx.dropna(subset=["BatteryLevel", "DiasDeUso"]).copy()
+            df_bat = df_bat[df_bat["DiasDeUso"] > 0]
+
+            if not df_bat.empty:
+                st.markdown('<div class="section-title">Saúde da Bateria vs. Tempo em Campo</div>',
+                            unsafe_allow_html=True)
+
+                # Colormap por nível de bateria
+                def _bat_color(b):
+                    if b >= 70:  return "#2ed573"
+                    if b >= 40:  return "#f0a500"
+                    return "#ff4757"
+
+                df_bat["_cor"] = df_bat["BatteryLevel"].apply(_bat_color)
+                df_bat["_tip"] = df_bat.apply(
+                    lambda r: (f"<b>{r['MachineName']}</b><br>"
+                               f"HW: {r['HardwareID']}<br>"
+                               f"Bateria: {r['BatteryLevel']:.1f}%<br>"
+                               f"Dias em campo: {r['DiasDeUso']}<br>"
+                               f"Taxa consumo: {r['TaxaConsumoBateria']:.4f}%/dia"
+                               if r['TaxaConsumoBateria'] else
+                               f"<b>{r['MachineName']}</b><br>HW: {r['HardwareID']}<br>"
+                               f"Bateria: {r['BatteryLevel']:.1f}%<br>Dias: {r['DiasDeUso']}"),
+                    axis=1,
+                )
+
+                fig_bat = go.Figure()
+
+                # Zonas de alerta de fundo
+                max_dias = int(df_bat["DiasDeUso"].max() * 1.1) or 365
+                fig_bat.add_hrect(y0=0,  y1=40,  fillcolor="rgba(255,71,87,0.05)",
+                                  line_width=0, annotation_text="⚠ Crítico",
+                                  annotation_position="right",
+                                  annotation_font=dict(color="#ff4757", size=9))
+                fig_bat.add_hrect(y0=40, y1=70,  fillcolor="rgba(240,165,0,0.04)",
+                                  line_width=0, annotation_text="Atenção",
+                                  annotation_position="right",
+                                  annotation_font=dict(color="#f0a500", size=9))
+                fig_bat.add_hrect(y0=70, y1=100, fillcolor="rgba(46,213,115,0.03)",
+                                  line_width=0, annotation_text="Normal",
+                                  annotation_position="right",
+                                  annotation_font=dict(color="#2ed573", size=9))
+
+                fig_bat.add_trace(go.Scatter(
+                    x=df_bat["DiasDeUso"],
+                    y=df_bat["BatteryLevel"],
+                    mode="markers",
+                    name="Sensor IMx-1",
+                    marker=dict(
+                        size=10,
+                        color=df_bat["_cor"].tolist(),
+                        line=dict(color="rgba(255,255,255,0.15)", width=1),
+                        opacity=0.85,
+                    ),
+                    text=df_bat["MachineName"],
+                    customdata=df_bat[["HardwareID", "TaxaConsumoBateria"]].values,
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "HW: %{customdata[0]}<br>"
+                        "Bateria: <b>%{y:.1f}%</b><br>"
+                        "Dias em campo: %{x}<br>"
+                        "Taxa: %{customdata[1]:.4f}%/dia<extra></extra>"
+                    ),
+                ))
+
+                # Linha de tendência (regressão linear simples)
+                if len(df_bat) >= 3:
+                    x_vals = df_bat["DiasDeUso"].values
+                    y_vals = df_bat["BatteryLevel"].values
+                    coef   = np.polyfit(x_vals, y_vals, 1)
+                    x_line = np.linspace(x_vals.min(), x_vals.max(), 100)
+                    y_line = np.polyval(coef, x_line)
+                    fig_bat.add_trace(go.Scatter(
+                        x=x_line, y=y_line,
+                        mode="lines",
+                        name=f"Tendência ({coef[0]:.4f}%/dia)",
+                        line=dict(color="rgba(168,85,247,0.6)", width=1.5, dash="dash"),
+                        hoverinfo="skip",
+                    ))
+
+                fig_bat.update_layout(
+                    paper_bgcolor="#090c10",
+                    plot_bgcolor="#0d1117",
+                    font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
+                    title=dict(
+                        text="<b>Bateria Residual vs. Dias em Campo</b>",
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(
+                        gridcolor="#21262d", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                        title=dict(text="Dias em Campo (desde 1ª medição)", font=dict(color="#8b949e", size=11)),
+                    ),
+                    yaxis=dict(
+                        gridcolor="#21262d", zeroline=False,
+                        range=[0, 105],
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                        title=dict(text="Bateria Residual [%]", font=dict(color="#8b949e", size=11)),
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#21262d", borderwidth=1,
+                        font=dict(family="Exo 2, sans-serif", size=11, color="#c9d1d9"),
+                        orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+                    ),
+                    hovermode="closest",
+                    margin=dict(l=60, r=80, t=70, b=60),
+                    height=420,
+                )
+                st.plotly_chart(fig_bat, use_container_width=True)
+
+            # ── Gráfico 3: Taxa de consumo de bateria (ranking horizontal) ──
+            df_taxa = df_imx.dropna(subset=["TaxaConsumoBateria"]).copy()
+            df_taxa = df_taxa[df_taxa["TaxaConsumoBateria"] > 0].sort_values(
+                "TaxaConsumoBateria", ascending=True
+            ).tail(25)   # top 25 maiores consumidores
+
+            if not df_taxa.empty:
+                st.markdown('<div class="section-title">Taxa de Consumo de Bateria — Top Sensores</div>',
+                            unsafe_allow_html=True)
+
+                bar_colors = [
+                    "#ff4757" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.75)
+                    else "#f0a500" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.40)
+                    else "#2ed573"
+                    for v in df_taxa["TaxaConsumoBateria"]
+                ]
+
+                fig_taxa = go.Figure(go.Bar(
+                    x=df_taxa["TaxaConsumoBateria"],
+                    y=df_taxa["MachineName"],
+                    orientation="h",
+                    marker=dict(
+                        color=bar_colors,
+                        line=dict(color="rgba(255,255,255,0.1)", width=0.5),
+                    ),
+                    customdata=df_taxa[["HardwareID", "BatteryLevel", "DiasDeUso"]].values,
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "HW: %{customdata[0]}<br>"
+                        "Taxa: <b>%{x:.4f}%/dia</b><br>"
+                        "Bateria: %{customdata[1]:.1f}%<br>"
+                        "Dias em campo: %{customdata[2]}<extra></extra>"
+                    ),
+                ))
+
+                fig_taxa.update_layout(
+                    paper_bgcolor="#090c10",
+                    plot_bgcolor="#0d1117",
+                    font=dict(family="Exo 2, sans-serif", color="#8b949e", size=11),
+                    title=dict(
+                        text="<b>Taxa de Consumo de Bateria</b>  ·  % consumida por dia",
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#e6edf3"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(
+                        gridcolor="#21262d", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#8b949e"),
+                        title=dict(text="Taxa de Consumo [%/dia]", font=dict(color="#8b949e", size=11)),
+                    ),
+                    yaxis=dict(
+                        gridcolor="rgba(0,0,0,0)",
+                        tickfont=dict(family="Exo 2, sans-serif", size=10, color="#c9d1d9"),
+                    ),
+                    hovermode="y",
+                    margin=dict(l=200, r=40, t=70, b=60),
+                    height=max(380, len(df_taxa) * 26 + 120),
+                )
+                st.plotly_chart(fig_taxa, use_container_width=True)
+
+            # ── Tabela completa e exportação ──────────
+            st.markdown('<div class="section-title">Tabela de Resultados</div>',
+                        unsafe_allow_html=True)
+
+            # Formata colunas para exibição
+            df_show_imx = df_imx.copy()
+            if "BatteryLevel" in df_show_imx.columns:
+                df_show_imx["BatteryLevel"] = df_show_imx["BatteryLevel"].apply(
+                    lambda x: f"{x:.1f}%" if x == x else "—"
+                )
+            if "TaxaConsumoBateria" in df_show_imx.columns:
+                df_show_imx["TaxaConsumoBateria"] = df_show_imx["TaxaConsumoBateria"].apply(
+                    lambda x: f"{x:.4f}%/dia" if x == x and x is not None else "—"
+                )
+            if "DiasDeUso" in df_show_imx.columns:
+                df_show_imx["DiasDeUso"] = df_show_imx["DiasDeUso"].apply(
+                    lambda x: f"{int(x)} dias" if x == x and x is not None else "—"
+                )
+
+            st.dataframe(
+                df_show_imx,
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+                column_config={
+                    "HardwareID":                   st.column_config.TextColumn("Hardware ID"),
+                    "MachineID":                    st.column_config.NumberColumn("Machine ID"),
+                    "MachineName":                  st.column_config.TextColumn("Equipamento"),
+                    "BatteryLevel":                 st.column_config.TextColumn("Bateria"),
+                    "SystemCreatedDate":            st.column_config.TextColumn("Criado no Sistema"),
+                    "ProvavelDataComissionamento":  st.column_config.TextColumn("Prov. Comissionamento"),
+                    "DiasDeUso":                    st.column_config.TextColumn("Dias em Campo"),
+                    "TaxaConsumoBateria":           st.column_config.TextColumn("Taxa Consumo Bat."),
+                },
+            )
+
+            # Exportação CSV
+            csv_imx = df_imx.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Exportar DataFrame IMx-1 (CSV)",
+                data=csv_imx,
+                file_name=f"imx1_comissionamento_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                type="primary",
+            )
+
+            # Log do último scan
+            if st.session_state.imx_log:
+                with st.expander("📋  Log da Varredura"):
+                    st.code("\n".join(st.session_state.imx_log), language=None)
