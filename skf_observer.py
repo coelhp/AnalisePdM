@@ -886,7 +886,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
                 commissioning_dt = None
             dias_uso = (today - commissioning_dt).days if commissioning_dt else None
 
-        # Cruza com sensor index
+        # ── Cruza com sensor index ─────────────────────────────────
         sensor_meta  = sensor_index.get(int(id_node), {}) if id_node is not None else {}
         hardware_id  = (
             sensor_meta.get("SensorIdentifier")
@@ -901,20 +901,57 @@ def run_imx_scan(base_url: str, username: str, password: str,
             except Exception:
                 battery_lvl = None
 
+        # ── Validação da data de comissionamento ───────────────────
+        # CreatedDate = ano 1940 é sentinela de campo vazio na API.
+        # Regra:
+        #   • CreatedDate ausente ou ano ≤ 1940  →  usa 1ª leitura de tendência
+        #   • CreatedDate válido                 →  usa CreatedDate (data de instalação real)
+        sensor_created_raw = (
+            sensor_meta.get("CreatedDate")
+            or sensor_meta.get("createdDate")
+            or sensor_meta.get("Created")
+            or sensor_meta.get("created")
+        )
+        try:
+            sensor_created_dt = pd.to_datetime(sensor_created_raw, utc=True) if sensor_created_raw else None
+        except Exception:
+            sensor_created_dt = None
+
+        # Descarta a data se for sentinela (ano ≤ 1940)
+        if sensor_created_dt is not None and sensor_created_dt.year <= 1940:
+            log(f"    ⚠ [{machine_id}] {machine_name}: CreatedDate sentinela "
+                f"({sensor_created_dt.year}) — ignorado.")
+            sensor_created_dt = None
+
+        if sensor_created_dt is not None:
+            effective_dt = sensor_created_dt
+            fonte        = "CreatedDate (sensor)"
+        elif commissioning_dt is not None:
+            effective_dt = commissioning_dt
+            fonte        = "1ª Leitura Tendência"
+        else:
+            effective_dt = None
+            fonte        = "—"
+
+        dias_uso = (today - effective_dt).days if effective_dt else None
+
         if dias_uso and dias_uso > 0 and battery_lvl is not None:
             taxa_bateria = round((100.0 - battery_lvl) / dias_uso, 4)
         else:
             taxa_bateria = None
 
         rows.append({
-            "HardwareID":                hardware_id,
-            "MachineID":                 machine_id,
-            "MachineName":               machine_name,
-            "BatteryLevel":              battery_lvl,
-            "SystemCreatedDate":         sys_created,
-            "ProvavelDataComissionamento": commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
-            "DiasDeUso":                 dias_uso,
-            "TaxaConsumoBateria":        taxa_bateria,
+            "HardwareID":                  hardware_id,
+            "MachineID":                   machine_id,
+            "MachineName":                 machine_name,
+            "BatteryLevel":                battery_lvl,
+            "SystemCreatedDate":           sys_created,
+            "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
+            "DataCriacaoSensor":           sensor_created_dt.strftime("%Y-%m-%d %H:%M:%S") if sensor_created_dt else None,
+            "ProvavelDataComissionamento": effective_dt.strftime("%Y-%m-%d %H:%M:%S") if effective_dt else None,
+            "FonteComissionamento":        fonte,
+            "DiasDeUso":                   dias_uso,
+            "TaxaConsumoBateria":          taxa_bateria,
         })
 
         prog((i + 1) / total, f"{i+1} / {total}: {machine_name}")
@@ -925,7 +962,8 @@ def run_imx_scan(base_url: str, username: str, password: str,
     if not rows:
         return pd.DataFrame(columns=[
             "HardwareID", "MachineID", "MachineName", "BatteryLevel",
-            "SystemCreatedDate", "ProvavelDataComissionamento",
+            "SystemCreatedDate", "DataPrimeiraLeitura", "DataCriacaoSensor",
+            "ProvavelDataComissionamento", "FonteComissionamento",
             "DiasDeUso", "TaxaConsumoBateria",
         ])
     return pd.DataFrame(rows)
@@ -1767,11 +1805,14 @@ with tab_imx:
             """, unsafe_allow_html=True)
         else:
             today_utc = datetime.now(timezone.utc)
-            n_total   = len(df_imx)
-            n_ok      = df_imx["ProvavelDataComissionamento"].notna().sum()
-            n_sem_bat = df_imx["BatteryLevel"].isna().sum()
-            bat_media = df_imx["BatteryLevel"].mean()
-            bat_min   = df_imx["BatteryLevel"].min()
+            n_total         = len(df_imx)
+            n_ok            = df_imx["ProvavelDataComissionamento"].notna().sum()
+            n_sem_bat       = df_imx["BatteryLevel"].isna().sum()
+            bat_media       = df_imx["BatteryLevel"].mean()
+            bat_min         = df_imx["BatteryLevel"].min()
+            n_created       = (df_imx.get("FonteComissionamento", pd.Series(dtype=str))
+                               .str.startswith("CreatedDate", na=False).sum())
+            n_sentinela     = n_total - n_ok  # sem data efetiva
 
             # ── KPI cards ────────────────────────────
             st.markdown(f"""
@@ -1782,16 +1823,21 @@ with tab_imx:
                     <div class="unit">encontrados na planta</div>
                 </div>
                 <div class="metric-card">
-                    <div class="label">Com Data de Comissionamento</div>
-                    <div class="value">{n_ok}</div>
-                    <div class="unit">de {n_total} sensores</div>
+                    <div class="label">Via CreatedDate</div>
+                    <div class="value">{n_created}</div>
+                    <div class="unit">data de instalação real</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Via 1ª Leitura</div>
+                    <div class="value">{n_ok - n_created}</div>
+                    <div class="unit">CreatedDate ausente / sentinela</div>
                 </div>
                 <div class="metric-card {"warn" if bat_media and bat_media < 50 else ""}">
                     <div class="label">Bateria Média</div>
                     <div class="value">{f"{bat_media:.1f}" if bat_media == bat_media else "—"}</div>
                     <div class="unit">% · mín {f"{bat_min:.1f}" if bat_min == bat_min else "—"}%</div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card {"warn" if n_sem_bat > 0 else ""}">
                     <div class="label">Sem Info de Bateria</div>
                     <div class="value">{n_sem_bat}</div>
                     <div class="unit">sensores sem metadado</div>
@@ -2078,7 +2124,10 @@ with tab_imx:
                     "MachineName":                  st.column_config.TextColumn("Equipamento"),
                     "BatteryLevel":                 st.column_config.TextColumn("Bateria"),
                     "SystemCreatedDate":            st.column_config.TextColumn("Criado no Sistema"),
-                    "ProvavelDataComissionamento":  st.column_config.TextColumn("Prov. Comissionamento"),
+                    "DataPrimeiraLeitura":          st.column_config.TextColumn("1ª Leitura Tendência"),
+                    "DataCriacaoSensor":            st.column_config.TextColumn("CreatedDate Sensor"),
+                    "ProvavelDataComissionamento":  st.column_config.TextColumn("✅ Comissionamento Efetivo"),
+                    "FonteComissionamento":         st.column_config.TextColumn("Fonte"),
                     "DiasDeUso":                    st.column_config.TextColumn("Dias em Campo"),
                     "TaxaConsumoBateria":           st.column_config.TextColumn("Taxa Consumo Bat."),
                 },
