@@ -309,9 +309,9 @@ for key, default in {
     "selected_point": None,
     "imx_df":         None,
     "imx_log":        [],
-    "base_url":       "http://127.0.0.1:14050",
-    "username":       "admin",
-    "_password":      "",
+    "base_url":       "http://services.repcenter.skf.com",
+    "username":       "patrick.coelho",
+    "_password":      "REMOVIDO",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -690,7 +690,7 @@ def status_badge(status_list):
 # ─────────────────────────────────────────────
 # IMx-1 SCAN — HELPERS DE API
 # ─────────────────────────────────────────────
-
+ 
 # NodeTypes que identificam sensores IMx-1
 IMX1_NODE_TYPES = {11101, 11102, 11103, 11104}
 # NodeType do ponto de temperatura (prioridade máxima)
@@ -699,8 +699,8 @@ IMX1_TEMP_NODE_TYPE = 11104
 IMX1_TEMP_EU_TYPE = 10905
 # Data de corte para varredura
 IMX1_FROM_DATE = "2024-05-01T00:00:00"
-
-
+ 
+ 
 def _ensure_token(base_url: str, username: str, password: str) -> str:
     """
     Retorna o token atual. Renova automaticamente se tiver mais de 18 minutos.
@@ -714,8 +714,8 @@ def _ensure_token(base_url: str, username: str, password: str) -> str:
     st.session_state.token    = token
     st.session_state.token_ts = now
     return token
-
-
+ 
+ 
 def get_points_v1(base_url: str, token: str, machine_id) -> list:
     """GET /v1/machines/{machineId}/points — retorna points com NodeType."""
     resp = requests.get(
@@ -728,8 +728,8 @@ def get_points_v1(base_url: str, token: str, machine_id) -> list:
     resp.raise_for_status()
     data = resp.json()
     return data if isinstance(data, list) else []
-
-
+ 
+ 
 def get_trend_first_reading(base_url: str, token: str, point_id) -> dict | None:
     """
     GET /v1/points/{pointId}/trendMeasurements — retorna APENAS a primeira
@@ -754,8 +754,8 @@ def get_trend_first_reading(base_url: str, token: str, point_id) -> dict | None:
     if isinstance(data, dict):
         return data
     return None
-
-
+ 
+ 
 def get_imx_sensors(base_url: str, token: str) -> dict:
     """
     GET /v1/nextgensensor — retorna dict {IDNode: {SensorIdentifier, BatteryLevel, ...}}.
@@ -776,8 +776,8 @@ def get_imx_sensors(base_url: str, token: str) -> dict:
         if nid is not None:
             index[int(nid)] = s
     return index
-
-
+ 
+ 
 def run_imx_scan(base_url: str, username: str, password: str,
                  progress_cb=None, log_cb=None) -> pd.DataFrame:
     """
@@ -790,28 +790,28 @@ def run_imx_scan(base_url: str, username: str, password: str,
       6. Monta DataFrame final com colunas de BI
     """
     import time
-
+ 
     def log(msg: str):
         if log_cb:
             log_cb(msg)
-
+ 
     def prog(val: float, text: str = ""):
         if progress_cb:
             progress_cb(val, text)
-
+ 
     today = datetime.now(timezone.utc)
     rows  = []
-
+ 
     # ── 1. Token inicial ──────────────────────────
     token = _ensure_token(base_url, username, password)
     log("🔑 Token obtido.")
-
+ 
     # ── 2. Assets ────────────────────────────────
     assets_list = get_assets(base_url, token)
     total = len(assets_list)
     log(f"🏭 {total} asset(s) encontrado(s).")
     prog(0.02, f"0 / {total} assets processados")
-
+ 
     # ── 3. Sensores IMx (metadados) ───────────────
     token = _ensure_token(base_url, username, password)
     try:
@@ -820,155 +820,185 @@ def run_imx_scan(base_url: str, username: str, password: str,
     except Exception as e:
         sensor_index = {}
         log(f"⚠ /v1/nextgensensor indisponível: {e}")
-
+ 
     # ── 4. Iterar assets → points → trend ────────
     for i, asset in enumerate(assets_list):
         machine_id   = asset.get("ID") or asset.get("id")
         machine_name = asset.get("Name") or asset.get("name", "—")
         sys_created  = asset.get("SystemCreatedDate") or asset.get("Created") or ""
-
+ 
         token = _ensure_token(base_url, username, password)
-
+ 
         try:
             points_v1 = get_points_v1(base_url, token, machine_id)
         except Exception as e:
             log(f"  ↳ [{machine_id}] {machine_name}: erro ao listar points — {e}")
             time.sleep(0.1)
             continue
-
+ 
         # Filtra apenas pontos IMx-1
         imx_points = [
             p for p in points_v1
             if int(p.get("NodeType", 0)) in IMX1_NODE_TYPES
         ]
-
+ 
         if not imx_points:
             prog((i + 1) / total, f"{i+1} / {total}: {machine_name} — sem IMx-1")
             time.sleep(0.05)
             continue
-
-        # Prioriza temperatura (NodeType 11104 ou EUType 10905)
-        temp_points = [
-            p for p in imx_points
-            if int(p.get("NodeType", 0)) == IMX1_TEMP_NODE_TYPE
-            or int(p.get("EUType",   0)) == IMX1_TEMP_EU_TYPE
-        ]
-        target_point = temp_points[0] if temp_points else imx_points[0]
-
-        point_id  = target_point.get("ID") or target_point.get("id") or target_point.get("PointID")
-        id_node   = target_point.get("ParentID") or target_point.get("IDNode") or target_point.get("NodeID")
-
-        log(f"  ↳ [{machine_id}] {machine_name} — point {point_id} (NodeType {target_point.get('NodeType')})")
-
-        # Busca primeira leitura
-        token = _ensure_token(base_url, username, password)
-        try:
-            first = get_trend_first_reading(base_url, token, point_id)
-        except Exception as e:
-            log(f"    ⚠ trend error: {e}")
-            first = None
-        time.sleep(0.15)          # delay entre chamadas
-
-        if first is None:
-            commissioning_dt = None
-            dias_uso         = None
-            taxa_bateria     = None
-        else:
-            ts_raw = (
-                first.get("ReadingTimeUTC")
-                or first.get("readingTimeUTC")
-                or first.get("timestamp")
-                or first.get("dateUTC")
+ 
+        # ── Agrupa points por IDNode (= sensor físico) ───────────────
+        # Cada IDNode representa um sensor distinto instalado na máquina.
+        # Um mesmo sensor pode ter múltiplos points (vibração, temperatura, etc.).
+        nodes: dict[int, list] = {}
+        for p in imx_points:
+            nid = (
+                p.get("ParentID")
+                or p.get("IDNode")
+                or p.get("NodeID")
             )
             try:
-                commissioning_dt = pd.to_datetime(ts_raw, utc=True)
-            except Exception:
-                commissioning_dt = None
-            dias_uso = (today - commissioning_dt).days if commissioning_dt else None
-
-        # ── Cruza com sensor index ─────────────────────────────────
-        sensor_meta  = sensor_index.get(int(id_node), {}) if id_node is not None else {}
-        hardware_id  = (
-            sensor_meta.get("SensorIdentifier")
-            or sensor_meta.get("sensorIdentifier")
-            or sensor_meta.get("HardwareID")
-            or "—"
-        )
-        battery_lvl  = sensor_meta.get("BatteryLevel") or sensor_meta.get("batteryLevel")
-        if battery_lvl is not None:
+                nid = int(nid)
+            except (TypeError, ValueError):
+                nid = None
+            if nid is None:
+                continue
+            nodes.setdefault(nid, []).append(p)
+ 
+        if not nodes:
+            prog((i + 1) / total, f"{i+1} / {total}: {machine_name} — IDNode indisponível")
+            time.sleep(0.05)
+            continue
+ 
+        log(f"  ↳ [{machine_id}] {machine_name}: {len(nodes)} sensor(es) IMx-1")
+ 
+        # ── Itera cada sensor (IDNode) individualmente ───────────────
+        for id_node, node_points in nodes.items():
+ 
+            # Escolhe o melhor point para buscar a 1ª leitura:
+            # prioridade: temperatura (NodeType 11104 / EUType 10905),
+            # depois qualquer outro ponto IMx-1 do nó.
+            temp_points = [
+                p for p in node_points
+                if int(p.get("NodeType", 0)) == IMX1_TEMP_NODE_TYPE
+                or int(p.get("EUType",   0)) == IMX1_TEMP_EU_TYPE
+            ]
+            target_point = temp_points[0] if temp_points else node_points[0]
+            point_id     = (
+                target_point.get("ID")
+                or target_point.get("id")
+                or target_point.get("PointID")
+            )
+ 
+            log(f"    · IDNode {id_node} — point {point_id} "
+                f"(NodeType {target_point.get('NodeType')}, {len(node_points)} point(s) no nó)")
+ 
+            # Busca primeira leitura
+            token = _ensure_token(base_url, username, password)
             try:
-                battery_lvl = float(battery_lvl)
+                first = get_trend_first_reading(base_url, token, point_id)
+            except Exception as e:
+                log(f"      ⚠ trend error: {e}")
+                first = None
+            time.sleep(0.15)
+ 
+            if first is None:
+                commissioning_dt = None
+            else:
+                ts_raw = (
+                    first.get("ReadingTimeUTC")
+                    or first.get("readingTimeUTC")
+                    or first.get("timestamp")
+                    or first.get("dateUTC")
+                )
+                try:
+                    commissioning_dt = pd.to_datetime(ts_raw, utc=True)
+                except Exception:
+                    commissioning_dt = None
+ 
+            # ── Metadados do sensor (nextgensensor) ──────────────────
+            sensor_meta = sensor_index.get(id_node, {})
+            hardware_id = (
+                sensor_meta.get("SensorIdentifier")
+                or sensor_meta.get("sensorIdentifier")
+                or sensor_meta.get("HardwareID")
+                or "—"
+            )
+            battery_lvl = sensor_meta.get("BatteryLevel") or sensor_meta.get("batteryLevel")
+            if battery_lvl is not None:
+                try:
+                    battery_lvl = float(battery_lvl)
+                except Exception:
+                    battery_lvl = None
+ 
+            # ── Validação da data de comissionamento ─────────────────
+            # CreatedDate = ano ≤ 1940 é sentinela de campo vazio na API.
+            # Regra:
+            #   • CreatedDate ausente ou ano ≤ 1940  →  usa 1ª leitura de tendência
+            #   • CreatedDate válido (ano > 1940)    →  usa CreatedDate
+            sensor_created_raw = (
+                sensor_meta.get("CreatedDate")
+                or sensor_meta.get("createdDate")
+                or sensor_meta.get("Created")
+                or sensor_meta.get("created")
+            )
+            try:
+                sensor_created_dt = pd.to_datetime(sensor_created_raw, utc=True) if sensor_created_raw else None
             except Exception:
-                battery_lvl = None
-
-        # ── Validação da data de comissionamento ───────────────────
-        # CreatedDate = ano 1940 é sentinela de campo vazio na API.
-        # Regra:
-        #   • CreatedDate ausente ou ano ≤ 1940  →  usa 1ª leitura de tendência
-        #   • CreatedDate válido                 →  usa CreatedDate (data de instalação real)
-        sensor_created_raw = (
-            sensor_meta.get("CreatedDate")
-            or sensor_meta.get("createdDate")
-            or sensor_meta.get("Created")
-            or sensor_meta.get("created")
-        )
-        try:
-            sensor_created_dt = pd.to_datetime(sensor_created_raw, utc=True) if sensor_created_raw else None
-        except Exception:
-            sensor_created_dt = None
-
-        # Descarta a data se for sentinela (ano ≤ 1940)
-        if sensor_created_dt is not None and sensor_created_dt.year <= 1940:
-            log(f"    ⚠ [{machine_id}] {machine_name}: CreatedDate sentinela "
-                f"({sensor_created_dt.year}) — ignorado.")
-            sensor_created_dt = None
-
-        if sensor_created_dt is not None:
-            effective_dt = sensor_created_dt
-            fonte        = "CreatedDate (sensor)"
-        elif commissioning_dt is not None:
-            effective_dt = commissioning_dt
-            fonte        = "1ª Leitura Tendência"
-        else:
-            effective_dt = None
-            fonte        = "—"
-
-        dias_uso = (today - effective_dt).days if effective_dt else None
-
-        if dias_uso and dias_uso > 0 and battery_lvl is not None:
-            taxa_bateria = round((100.0 - battery_lvl) / dias_uso, 4)
-        else:
-            taxa_bateria = None
-
-        rows.append({
-            "HardwareID":                  hardware_id,
-            "MachineID":                   machine_id,
-            "MachineName":                 machine_name,
-            "BatteryLevel":                battery_lvl,
-            "SystemCreatedDate":           sys_created,
-            "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
-            "DataCriacaoSensor":           sensor_created_dt.strftime("%Y-%m-%d %H:%M:%S") if sensor_created_dt else None,
-            "ProvavelDataComissionamento": effective_dt.strftime("%Y-%m-%d %H:%M:%S") if effective_dt else None,
-            "FonteComissionamento":        fonte,
-            "DiasDeUso":                   dias_uso,
-            "TaxaConsumoBateria":          taxa_bateria,
-        })
-
+                sensor_created_dt = None
+ 
+            if sensor_created_dt is not None and sensor_created_dt.year <= 1940:
+                log(f"      ⚠ IDNode {id_node}: CreatedDate sentinela "
+                    f"({sensor_created_dt.year}) — ignorado.")
+                sensor_created_dt = None
+ 
+            if sensor_created_dt is not None:
+                effective_dt = sensor_created_dt
+                fonte        = "CreatedDate (sensor)"
+            elif commissioning_dt is not None:
+                effective_dt = commissioning_dt
+                fonte        = "1ª Leitura Tendência"
+            else:
+                effective_dt = None
+                fonte        = "—"
+ 
+            dias_uso = (today - effective_dt).days if effective_dt else None
+ 
+            if dias_uso and dias_uso > 0 and battery_lvl is not None:
+                taxa_bateria = round((100.0 - battery_lvl) / dias_uso, 4)
+            else:
+                taxa_bateria = None
+ 
+            rows.append({
+                "HardwareID":                  hardware_id,
+                "IDNode":                      id_node,
+                "MachineID":                   machine_id,
+                "MachineName":                 machine_name,
+                "BatteryLevel":                battery_lvl,
+                "SystemCreatedDate":           sys_created,
+                "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
+                "DataCriacaoSensor":           sensor_created_dt.strftime("%Y-%m-%d %H:%M:%S") if sensor_created_dt else None,
+                "ProvavelDataComissionamento": effective_dt.strftime("%Y-%m-%d %H:%M:%S") if effective_dt else None,
+                "FonteComissionamento":        fonte,
+                "DiasDeUso":                   dias_uso,
+                "TaxaConsumoBateria":          taxa_bateria,
+            })
+ 
         prog((i + 1) / total, f"{i+1} / {total}: {machine_name}")
-
+ 
     log(f"✅ Varredura concluída — {len(rows)} sensor(es) IMx-1 identificado(s).")
     prog(1.0, "Concluído")
-
+ 
     if not rows:
         return pd.DataFrame(columns=[
-            "HardwareID", "MachineID", "MachineName", "BatteryLevel",
+            "HardwareID", "IDNode", "MachineID", "MachineName", "BatteryLevel",
             "SystemCreatedDate", "DataPrimeiraLeitura", "DataCriacaoSensor",
             "ProvavelDataComissionamento", "FonteComissionamento",
             "DiasDeUso", "TaxaConsumoBateria",
         ])
     return pd.DataFrame(rows)
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # SIDEBAR — Conexão
 # ─────────────────────────────────────────────
@@ -984,18 +1014,18 @@ with st.sidebar:
     </div>
     <hr style="border-color:#21262d;margin:8px 0 20px 0;">
     """, unsafe_allow_html=True)
-
+ 
     st.markdown('<div class="sidebar-label">Servidor</div>', unsafe_allow_html=True)
     base_url = st.text_input("", value=st.session_state.base_url,
                               placeholder="http://127.0.0.1:14050", label_visibility="collapsed")
     st.session_state.base_url = base_url
-
+ 
     st.markdown('<div class="sidebar-label" style="margin-top:12px;">Usuário</div>', unsafe_allow_html=True)
     username = st.text_input("", value=st.session_state.username, label_visibility="collapsed")
-
+ 
     st.markdown('<div class="sidebar-label" style="margin-top:12px;">Senha</div>', unsafe_allow_html=True)
     password = st.text_input("", type="password", placeholder="••••••••", label_visibility="collapsed")
-
+ 
     if st.button("🔌  Conectar", use_container_width=True):
         with st.spinner("Autenticando..."):
             try:
@@ -1018,7 +1048,7 @@ with st.sidebar:
                 st.error(f"❌ Erro HTTP {e.response.status_code}")
             except Exception as e:
                 st.error(f"❌ {e}")
-
+ 
     # Status de conexão
     st.markdown('<hr style="border-color:#21262d;margin:20px 0;">', unsafe_allow_html=True)
     if st.session_state.token:
@@ -1036,12 +1066,12 @@ with st.sidebar:
             <span style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;
                          color:#484f58;letter-spacing:1px;">DESCONECTADO</span>
         </div>""", unsafe_allow_html=True)
-
+ 
     # Filtros de data (visível só quando conectado)
     if st.session_state.token:
         st.markdown('<hr style="border-color:#21262d;margin:20px 0;">', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-label">Período de tendência</div>', unsafe_allow_html=True)
-
+ 
         today = datetime.now(timezone.utc).date()
         date_from = st.date_input("De", value=today - timedelta(days=90), label_visibility="visible")
         date_to   = st.date_input("Até", value=today, label_visibility="visible")
@@ -1050,12 +1080,12 @@ with st.sidebar:
         st.session_state["date_from"] = date_from
         st.session_state["date_to"]   = date_to
         st.session_state["max_read"]  = max_read
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # MAIN CONTENT
 # ─────────────────────────────────────────────
-
+ 
 # Header banner
 st.markdown("""
 <div class="top-banner">
@@ -1066,7 +1096,7 @@ st.markdown("""
     </div>
 </div>
 """, unsafe_allow_html=True)
-
+ 
 # ── Sem conexão ──────────────────────────────
 if not st.session_state.token:
     st.markdown("""
@@ -1074,7 +1104,7 @@ if not st.session_state.token:
         ⟶  Configure as credenciais na barra lateral e clique em <strong>Conectar</strong> para iniciar.
     </div>
     """, unsafe_allow_html=True)
-
+ 
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("""
@@ -1113,8 +1143,8 @@ if not st.session_state.token:
         </div>
         """, unsafe_allow_html=True)
     st.stop()
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────
@@ -1122,18 +1152,18 @@ tab_monitor, tab_imx = st.tabs([
     "📈  Monitor de Pontos",
     "🔬  IMx-1 Comissionamento",
 ])
-
+ 
 # ══════════════════════════════════════════════
 # TAB 1 — MONITOR DE PONTOS
 # ══════════════════════════════════════════════
 with tab_monitor:
-
+ 
     # ─────────────────────────────────────────
     # ASSETS
     # ─────────────────────────────────────────
     assets = st.session_state.assets
     st.markdown('<div class="section-title">Assets — Máquinas Cadastradas</div>', unsafe_allow_html=True)
-
+ 
     # Tabela de assets
     rows_html = ""
     for a in assets:
@@ -1146,7 +1176,7 @@ with tab_monitor:
             <td style="font-size:0.78rem;font-family:'Share Tech Mono',monospace;color:#484f58;">{a.get('Path','—')}</td>
             <td>{badge}</td>
         </tr>"""
-
+ 
     st.markdown(f"""
     <table class="data-table">
         <thead><tr>
@@ -1155,7 +1185,7 @@ with tab_monitor:
         <tbody>{rows_html}</tbody>
     </table>
     """, unsafe_allow_html=True)
-
+ 
     # Seleção de asset
     st.markdown("<br>", unsafe_allow_html=True)
     col_sel, col_btn = st.columns([3, 1])
@@ -1170,7 +1200,7 @@ with tab_monitor:
     with col_btn:
         st.markdown("<br>", unsafe_allow_html=True)
         load_points = st.button("⟶  Carregar Points", use_container_width=True)
-
+ 
     if load_points:
         selected_asset = asset_options[chosen_asset_label]
         st.session_state.selected_asset = selected_asset
@@ -1183,16 +1213,16 @@ with tab_monitor:
                 st.session_state.points = pts
             except Exception as e:
                 st.error(f"Erro ao carregar points: {e}")
-
+ 
     # ─────────────────────────────────────────────
     # POINTS
     # ─────────────────────────────────────────────
     if st.session_state.points:
         points = st.session_state.points
         asset  = st.session_state.selected_asset
-
+ 
         st.markdown(f'<div class="section-title">Points — {asset["Name"]}</div>', unsafe_allow_html=True)
-
+ 
         # Cards de resumo
         st.markdown(f"""
         <div class="metric-row">
@@ -1215,7 +1245,7 @@ with tab_monitor:
             </div>
         </div>
         """, unsafe_allow_html=True)
-
+ 
         # Tabela de points
         rows_html = ""
         for p in points:
@@ -1230,19 +1260,19 @@ with tab_monitor:
                 <td style="font-size:0.82rem;color:#8b949e;">{ptype}</td>
                 <td style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:#00d9ff;">{unit}</td>
             </tr>"""
-
+ 
         st.markdown(f"""
         <table class="data-table">
             <thead><tr><th>ID</th><th>Nome do Point</th><th>Tipo</th><th>Unidade</th></tr></thead>
             <tbody>{rows_html}</tbody>
         </table>
         """, unsafe_allow_html=True)
-
+ 
         # Seleção de point
         st.markdown("<br>", unsafe_allow_html=True)
         col_pt, col_btn2, col_btn3 = st.columns([3, 1, 1])
         point_opts = {f"[{p.get('id',p.get('ID'))}]  {p.get('name',p.get('Name','?'))}": p for p in points}
-
+ 
         with col_pt:
             chosen_point_label = st.selectbox(
                 "Selecionar Point",
@@ -1255,19 +1285,19 @@ with tab_monitor:
         with col_btn3:
             st.markdown("<br>", unsafe_allow_html=True)
             load_spectrum = st.button("〜  Carregar Espectro", use_container_width=True)
-
+ 
         if load_trend:
             pt = point_opts[chosen_point_label]
             st.session_state.selected_point = pt
             st.session_state.spectrum_data  = None
             pid = pt.get("id", pt.get("ID"))
-
+ 
             from_dt = st.session_state.get("date_from")
             to_dt   = st.session_state.get("date_to")
             max_r   = st.session_state.get("max_read", 500)
             from_str = f"{from_dt}T00:00:00Z" if from_dt else None
             to_str   = f"{to_dt}T23:59:59Z"   if to_dt   else None
-
+ 
             with st.spinner(f"Buscando dados de tendência para point [{pid}]..."):
                 try:
                     raw = get_trend(st.session_state.base_url, st.session_state.token,
@@ -1276,12 +1306,12 @@ with tab_monitor:
                     st.session_state.trend_df = df
                 except Exception as e:
                     st.error(f"Erro ao buscar trend: {e}")
-
+ 
         if load_spectrum:
             pt = point_opts[chosen_point_label]
             st.session_state.selected_point = pt
             pid = pt.get("id", pt.get("ID"))
-
+ 
             with st.spinner(f"Buscando espectro de vibração para point [{pid}]..."):
                 try:
                     raw_spec = get_spectrum(st.session_state.base_url, st.session_state.token, pid)
@@ -1296,8 +1326,8 @@ with tab_monitor:
                         st.error(f"Erro HTTP ao buscar espectro: {e}")
                 except Exception as e:
                     st.error(f"Erro ao buscar espectro: {e}")
-
-
+ 
+ 
     # ─────────────────────────────────────────────
     # TREND PLOT
     # ─────────────────────────────────────────────
@@ -1305,12 +1335,12 @@ with tab_monitor:
         df_all = st.session_state.trend_df
         point  = st.session_state.selected_point
         asset  = st.session_state.selected_asset
-
+ 
         pname = point.get("name", point.get("Name", "—"))
         pid   = point.get("id",   point.get("ID",   "—"))
-
+ 
         st.markdown(f'<div class="section-title">Tendência — {pname}</div>', unsafe_allow_html=True)
-
+ 
         if df_all.empty:
             st.markdown("""
             <div class="alert-warn">⚠ Nenhuma leitura encontrada para o período selecionado.</div>
@@ -1318,7 +1348,7 @@ with tab_monitor:
         else:
             # ── Seletor de canal (quando há múltiplos channels) ─────────
             channel_opts = get_channel_options(df_all)
-
+ 
             if len(channel_opts) > 1:
                 chosen_ch_label = st.selectbox(
                     "Canal de medição",
@@ -1328,14 +1358,14 @@ with tab_monitor:
                 selected_ch = channel_opts[chosen_ch_label]
             else:
                 selected_ch = list(channel_opts.values())[0] if channel_opts else 1
-
+ 
             # Filtra pelo canal selecionado
             df = df_all[df_all["channel"] == selected_ch].copy()
-
+ 
             unit         = df["unit"].iloc[-1]         if not df.empty else ""
             channel_name = df["channel_name"].iloc[-1]  if not df.empty else "Overall"
             direction    = df["direction"].iloc[-1]      if not df.empty else ""
-
+ 
             # ── Estatísticas ─────────────────────────
             media   = df["value"].mean()
             desvio  = df["value"].std()
@@ -1344,15 +1374,15 @@ with tab_monitor:
             vlast   = df["value"].iloc[-1]
             l_alert = media + 2 * desvio
             l_alarm = media + 3 * desvio
-
+ 
             in_alarm   = vlast >= l_alarm
             in_alert   = vlast >= l_alert and not in_alarm
             card_class = "danger" if in_alarm else ("warn" if in_alert else "ok")
-
+ 
             # Velocidade e processo (se disponíveis)
             has_speed = "speed" in df.columns and df["speed"].notna().any()
             speed_last = df["speed"].iloc[-1] if has_speed else None
-
+ 
             st.markdown(f"""
             <div class="metric-row">
                 <div class="metric-card {card_class}">
@@ -1388,7 +1418,7 @@ with tab_monitor:
                 </div>'''}
             </div>
             """, unsafe_allow_html=True)
-
+ 
             if in_alarm:
                 st.markdown(f'<div class="alert-danger">🚨 ALARME — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+3σ ({l_alarm:.4f})</div>',
                             unsafe_allow_html=True)
@@ -1398,14 +1428,14 @@ with tab_monitor:
             else:
                 st.markdown(f'<div class="alert-ok">✔ NORMAL — Leitura dentro dos limites esperados.</div>',
                             unsafe_allow_html=True)
-
+ 
             # ── Plotly Chart ──────────────────────────
             ch_title = f"{channel_name}"
             if direction:
                 ch_title += f" [{direction}]"
-
+ 
             fig = go.Figure()
-
+ 
             # Área sombreada
             fig.add_trace(go.Scatter(
                 x=df["timestamp"], y=df["value"],
@@ -1414,7 +1444,7 @@ with tab_monitor:
                 line=dict(color="rgba(0,0,0,0)"),
                 showlegend=False, hoverinfo="skip",
             ))
-
+ 
             # Banda ±1σ
             fig.add_trace(go.Scatter(
                 x=pd.concat([df["timestamp"], df["timestamp"][::-1]]),
@@ -1428,7 +1458,7 @@ with tab_monitor:
                 name="±1σ (normal)",
                 hoverinfo="skip",
             ))
-
+ 
             # Linha principal de leitura
             fig.add_trace(go.Scatter(
                 x=df["timestamp"], y=df["value"],
@@ -1441,7 +1471,7 @@ with tab_monitor:
                     f"<b>{ch_title}:</b> %{{y:.4f}} {unit}<extra></extra>"
                 ),
             ))
-
+ 
             # Linha de velocidade (eixo secundário, se disponível)
             if has_speed and df["speed"].notna().any():
                 fig.add_trace(go.Scatter(
@@ -1453,7 +1483,7 @@ with tab_monitor:
                     hovertemplate="<b>Velocidade:</b> %{y:.1f} RPM<extra></extra>",
                     opacity=0.7,
                 ))
-
+ 
             # Linhas de referência
             fig.add_hline(y=media, line=dict(color="#2ed573", width=1.5, dash="dash"),
                           annotation_text=f"Média  {media:.4f}", annotation_font_color="#2ed573",
@@ -1464,7 +1494,7 @@ with tab_monitor:
             fig.add_hline(y=l_alarm, line=dict(color="#ff4757", width=1.2, dash="dot"),
                           annotation_text=f"Alarme  {l_alarm:.4f}", annotation_font_color="#ff4757",
                           annotation_position="top right")
-
+ 
             layout_extra = {}
             if has_speed:
                 layout_extra["yaxis2"] = dict(
@@ -1473,7 +1503,7 @@ with tab_monitor:
                     gridcolor="rgba(0,0,0,0)",
                     tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
                 )
-
+ 
             fig.update_layout(
                 paper_bgcolor="#090c10",
                 plot_bgcolor="#0d1117",
@@ -1504,9 +1534,9 @@ with tab_monitor:
                 height=500,
                 **layout_extra,
             )
-
+ 
             st.plotly_chart(fig, use_container_width=True)
-
+ 
             # ── Tabela de dados brutos ───────────────
             with st.expander("🗃  Ver dados brutos"):
                 df_show = df[["timestamp", "value", "unit", "channel_name",
@@ -1517,7 +1547,7 @@ with tab_monitor:
                     "Canal", "Direção", "Velocidade (RPM)", "Processo",
                 ]
                 st.dataframe(df_show, use_container_width=True, hide_index=True, height=300)
-
+ 
                 csv = df_show.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "⬇  Exportar CSV",
@@ -1525,8 +1555,8 @@ with tab_monitor:
                     file_name=f"trend_{pid}_ch{selected_ch}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                 )
-
-
+ 
+ 
     # ─────────────────────────────────────────────
     # SPECTRUM PLOT
     # ─────────────────────────────────────────────
@@ -1535,15 +1565,15 @@ with tab_monitor:
         point  = st.session_state.selected_point
         pname  = point.get("name", point.get("Name", "—")) if point else "—"
         pid    = point.get("id",   point.get("ID",   "—")) if point else "—"
-
+ 
         st.markdown(f'<div class="section-title">Espectro de Vibração — {pname}</div>',
                     unsafe_allow_html=True)
-
+ 
         # ── Info cards do espectro ──────────────────
         first = channels_spec[0]
         speed_val = first.get("speed", 0.0)
         n_ch = len(channels_spec)
-
+ 
         st.markdown(f"""
         <div class="metric-row">
             <div class="metric-card">
@@ -1574,34 +1604,34 @@ with tab_monitor:
             </div>'''}
         </div>
         """, unsafe_allow_html=True)
-
+ 
         # ── Seletor de canal (se múltiplos) ────────
         DIRECTION_MAP = {0: "X", 1: "Y", 2: "Z", 3: "H", 4: "V", 5: "A", -1: "—"}
         MTYPE_MAP     = {0: "Waveform", 1: "Espectro (velocidade)", 2: "Espectro", 3: "Cepstrum"}
-
+ 
         ch_labels = []
         for i, ch in enumerate(channels_spec):
             dir_str  = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
             mtype_str = MTYPE_MAP.get(ch["mtype"], f"Tipo {ch['mtype']}")
             ch_labels.append(f"Canal {i+1}  [{dir_str}]  — {mtype_str}")
-
+ 
         if len(ch_labels) > 1:
             sel_ch_label = st.selectbox("Canal do espectro", options=ch_labels, key="spec_ch_sel")
             sel_ch_idx = ch_labels.index(sel_ch_label)
         else:
             sel_ch_idx = 0
-
+ 
         ch = channels_spec[sel_ch_idx]
         freqs  = ch["freqs"]
         values = ch["values"]
         eu     = ch["eu"]
         dir_str = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
-
+ 
         # ── Picos principais (top 10) ───────────────
         peak_indices = np.argsort(values)[::-1][:10]
         peak_freqs   = freqs[peak_indices]
         peak_vals    = values[peak_indices]
-
+ 
         # ── Frequência de rotação (1X, 2X, 3X) ──────
         harmonic_lines = []
         if speed_val and speed_val > 0:
@@ -1610,10 +1640,10 @@ with tab_monitor:
                 hf = rpm_hz * h
                 if ch["start_freq"] <= hf <= ch["end_freq"]:
                     harmonic_lines.append((hf, f"{h}X  {hf:.1f} Hz"))
-
+ 
         # ── Plotly ──────────────────────────────────
         fig_spec = go.Figure()
-
+ 
         # Área preenchida sob o espectro
         fig_spec.add_trace(go.Scatter(
             x=freqs, y=values,
@@ -1622,7 +1652,7 @@ with tab_monitor:
             line=dict(color="rgba(0,0,0,0)"),
             showlegend=False, hoverinfo="skip",
         ))
-
+ 
         # Linha do espectro
         fig_spec.add_trace(go.Scatter(
             x=freqs, y=values,
@@ -1631,7 +1661,7 @@ with tab_monitor:
             line=dict(color="#00d9ff", width=1.5),
             hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.4f} " + eu + "<extra></extra>",
         ))
-
+ 
         # Marcadores de picos
         fig_spec.add_trace(go.Scatter(
             x=peak_freqs, y=peak_vals,
@@ -1644,7 +1674,7 @@ with tab_monitor:
             textfont=dict(family="Share Tech Mono, monospace", size=9, color="#f0a500"),
             hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.5f} " + eu + "<extra>Pico</extra>",
         ))
-
+ 
         # Linhas harmônicas de rotação
         for hf, hlabel in harmonic_lines:
             fig_spec.add_vline(
@@ -1654,7 +1684,7 @@ with tab_monitor:
                 annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#a855f7"),
                 annotation_position="top",
             )
-
+ 
         fig_spec.update_layout(
             paper_bgcolor="#090c10",
             plot_bgcolor="#0d1117",
@@ -1686,9 +1716,9 @@ with tab_monitor:
             margin=dict(l=60, r=40, t=70, b=60),
             height=450,
         )
-
+ 
         st.plotly_chart(fig_spec, use_container_width=True)
-
+ 
         # ── Tabela de picos ──────────────────────────
         with st.expander("📊  Top 10 picos do espectro"):
             df_peaks = pd.DataFrame({
@@ -1697,7 +1727,7 @@ with tab_monitor:
                 "Rank": [f"#{i+1}" for i in range(len(peak_freqs))],
             })
             st.dataframe(df_peaks, use_container_width=True, hide_index=True)
-
+ 
             csv_spec = df_peaks.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "⬇  Exportar picos CSV",
@@ -1705,7 +1735,7 @@ with tab_monitor:
                 file_name=f"spectrum_peaks_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
-
+ 
         # ── Exportar espectro completo ───────────────
         with st.expander("🗃  Ver espectro completo (dados brutos)"):
             df_full_spec = pd.DataFrame({
@@ -1713,7 +1743,7 @@ with tab_monitor:
                 f"Amplitude ({eu})": np.round(values, 6),
             })
             st.dataframe(df_full_spec, use_container_width=True, hide_index=True, height=300)
-
+ 
             csv_full = df_full_spec.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "⬇  Exportar espectro completo CSV",
@@ -1721,16 +1751,16 @@ with tab_monitor:
                 file_name=f"spectrum_full_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
-
-
+ 
+ 
 # ══════════════════════════════════════════════
 # TAB 2 — IMx-1 COMISSIONAMENTO
 # ══════════════════════════════════════════════
 with tab_imx:
-
+ 
     st.markdown('<div class="section-title">Varredura IMx-1 — Data de Comissionamento</div>',
                 unsafe_allow_html=True)
-
+ 
     st.markdown("""
     <div class="alert-info">
         ℹ  Esta varredura percorre <strong>todos os assets</strong> da planta, identifica pontos
@@ -1739,7 +1769,7 @@ with tab_imx:
         A duração depende do número de ativos — um pequeno delay é aplicado entre chamadas.
     </div>
     """, unsafe_allow_html=True)
-
+ 
     # ── Botão de varredura ────────────────────────
     col_scan, col_clear = st.columns([2, 1])
     with col_scan:
@@ -1753,7 +1783,7 @@ with tab_imx:
             st.session_state.imx_df  = None
             st.session_state.imx_log = []
             st.rerun()
-
+ 
     # ── Executa varredura ─────────────────────────
     if run_scan:
         pw = st.session_state.get("_password", "")
@@ -1762,14 +1792,14 @@ with tab_imx:
         else:
             st.session_state.imx_df  = None
             st.session_state.imx_log = []
-
+ 
             progress_bar  = st.progress(0.0, text="Iniciando varredura...")
             log_container = st.empty()
             log_lines     = []
-
+ 
             def _progress(val: float, text: str = ""):
                 progress_bar.progress(min(val, 1.0), text=text or "Processando...")
-
+ 
             def _log(msg: str):
                 log_lines.append(msg)
                 log_container.markdown(
@@ -1778,7 +1808,7 @@ with tab_imx:
                                 for l in log_lines[-12:]),
                     unsafe_allow_html=True,
                 )
-
+ 
             try:
                 df_imx = run_imx_scan(
                     st.session_state.base_url,
@@ -1793,11 +1823,11 @@ with tab_imx:
                 log_container.empty()
             except Exception as e:
                 st.error(f"❌ Erro durante varredura: {e}")
-
+ 
     # ── Resultados ────────────────────────────────
     if st.session_state.imx_df is not None:
         df_imx = st.session_state.imx_df
-
+ 
         if df_imx.empty:
             st.markdown("""
             <div class="alert-warn">⚠ Nenhum sensor IMx-1 encontrado na planta
@@ -1813,7 +1843,7 @@ with tab_imx:
             n_created       = (df_imx.get("FonteComissionamento", pd.Series(dtype=str))
                                .str.startswith("CreatedDate", na=False).sum())
             n_sentinela     = n_total - n_ok  # sem data efetiva
-
+ 
             # ── KPI cards ────────────────────────────
             st.markdown(f"""
             <div class="metric-row">
@@ -1844,22 +1874,22 @@ with tab_imx:
                 </div>
             </div>
             """, unsafe_allow_html=True)
-
+ 
             # ── Gráfico 1: Linha do tempo de comissionamento ──────────
             df_plot = df_imx.dropna(subset=["ProvavelDataComissionamento"]).copy()
             df_plot["_dt"] = pd.to_datetime(df_plot["ProvavelDataComissionamento"], utc=True, errors="coerce")
             df_plot = df_plot.dropna(subset=["_dt"]).sort_values("_dt")
-
+ 
             if not df_plot.empty:
                 st.markdown('<div class="section-title">Linha do Tempo — Comissionamento dos Sensores</div>',
                             unsafe_allow_html=True)
-
+ 
                 # Agrupa por mês para histogram
                 df_plot["_mes"] = df_plot["_dt"].dt.to_period("M").dt.to_timestamp()
                 contagem_mes    = df_plot.groupby("_mes").size().reset_index(name="qtd")
-
+ 
                 fig_timeline = go.Figure()
-
+ 
                 # Barras de comissionamento por mês
                 fig_timeline.add_trace(go.Bar(
                     x=contagem_mes["_mes"],
@@ -1872,7 +1902,7 @@ with tab_imx:
                     ),
                     hovertemplate="<b>%{x|%b/%Y}</b><br>%{y} sensor(es)<extra></extra>",
                 ))
-
+ 
                 # Acumulado como linha
                 contagem_mes["acumulado"] = contagem_mes["qtd"].cumsum()
                 fig_timeline.add_trace(go.Scatter(
@@ -1885,7 +1915,7 @@ with tab_imx:
                     yaxis="y2",
                     hovertemplate="<b>%{x|%b/%Y}</b><br>Acumulado: %{y}<extra></extra>",
                 ))
-
+ 
                 fig_timeline.update_layout(
                     paper_bgcolor="#090c10",
                     plot_bgcolor="#0d1117",
@@ -1922,21 +1952,21 @@ with tab_imx:
                     height=400,
                 )
                 st.plotly_chart(fig_timeline, use_container_width=True)
-
+ 
             # ── Gráfico 2: Bateria vs Dias de Uso (scatter) ───────────
             df_bat = df_imx.dropna(subset=["BatteryLevel", "DiasDeUso"]).copy()
             df_bat = df_bat[df_bat["DiasDeUso"] > 0]
-
+ 
             if not df_bat.empty:
                 st.markdown('<div class="section-title">Saúde da Bateria vs. Tempo em Campo</div>',
                             unsafe_allow_html=True)
-
+ 
                 # Colormap por nível de bateria
                 def _bat_color(b):
                     if b >= 70:  return "#2ed573"
                     if b >= 40:  return "#f0a500"
                     return "#ff4757"
-
+ 
                 df_bat["_cor"] = df_bat["BatteryLevel"].apply(_bat_color)
                 df_bat["_tip"] = df_bat.apply(
                     lambda r: (f"<b>{r['MachineName']}</b><br>"
@@ -1949,9 +1979,9 @@ with tab_imx:
                                f"Bateria: {r['BatteryLevel']:.1f}%<br>Dias: {r['DiasDeUso']}"),
                     axis=1,
                 )
-
+ 
                 fig_bat = go.Figure()
-
+ 
                 # Zonas de alerta de fundo
                 max_dias = int(df_bat["DiasDeUso"].max() * 1.1) or 365
                 fig_bat.add_hrect(y0=0,  y1=40,  fillcolor="rgba(255,71,87,0.05)",
@@ -1966,7 +1996,7 @@ with tab_imx:
                                   line_width=0, annotation_text="Normal",
                                   annotation_position="right",
                                   annotation_font=dict(color="#2ed573", size=9))
-
+ 
                 fig_bat.add_trace(go.Scatter(
                     x=df_bat["DiasDeUso"],
                     y=df_bat["BatteryLevel"],
@@ -1988,7 +2018,7 @@ with tab_imx:
                         "Taxa: %{customdata[1]:.4f}%/dia<extra></extra>"
                     ),
                 ))
-
+ 
                 # Linha de tendência (regressão linear simples)
                 if len(df_bat) >= 3:
                     x_vals = df_bat["DiasDeUso"].values
@@ -2003,7 +2033,7 @@ with tab_imx:
                         line=dict(color="rgba(168,85,247,0.6)", width=1.5, dash="dash"),
                         hoverinfo="skip",
                     ))
-
+ 
                 fig_bat.update_layout(
                     paper_bgcolor="#090c10",
                     plot_bgcolor="#0d1117",
@@ -2034,24 +2064,24 @@ with tab_imx:
                     height=420,
                 )
                 st.plotly_chart(fig_bat, use_container_width=True)
-
+ 
             # ── Gráfico 3: Taxa de consumo de bateria (ranking horizontal) ──
             df_taxa = df_imx.dropna(subset=["TaxaConsumoBateria"]).copy()
             df_taxa = df_taxa[df_taxa["TaxaConsumoBateria"] > 0].sort_values(
                 "TaxaConsumoBateria", ascending=True
             ).tail(25)   # top 25 maiores consumidores
-
+ 
             if not df_taxa.empty:
                 st.markdown('<div class="section-title">Taxa de Consumo de Bateria — Top Sensores</div>',
                             unsafe_allow_html=True)
-
+ 
                 bar_colors = [
                     "#ff4757" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.75)
                     else "#f0a500" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.40)
                     else "#2ed573"
                     for v in df_taxa["TaxaConsumoBateria"]
                 ]
-
+ 
                 fig_taxa = go.Figure(go.Bar(
                     x=df_taxa["TaxaConsumoBateria"],
                     y=df_taxa["MachineName"],
@@ -2069,7 +2099,7 @@ with tab_imx:
                         "Dias em campo: %{customdata[2]}<extra></extra>"
                     ),
                 ))
-
+ 
                 fig_taxa.update_layout(
                     paper_bgcolor="#090c10",
                     plot_bgcolor="#0d1117",
@@ -2093,11 +2123,11 @@ with tab_imx:
                     height=max(380, len(df_taxa) * 26 + 120),
                 )
                 st.plotly_chart(fig_taxa, use_container_width=True)
-
+ 
             # ── Tabela completa e exportação ──────────
             st.markdown('<div class="section-title">Tabela de Resultados</div>',
                         unsafe_allow_html=True)
-
+ 
             # Formata colunas para exibição
             df_show_imx = df_imx.copy()
             if "BatteryLevel" in df_show_imx.columns:
@@ -2112,7 +2142,7 @@ with tab_imx:
                 df_show_imx["DiasDeUso"] = df_show_imx["DiasDeUso"].apply(
                     lambda x: f"{int(x)} dias" if x == x and x is not None else "—"
                 )
-
+ 
             st.dataframe(
                 df_show_imx,
                 use_container_width=True,
@@ -2120,6 +2150,7 @@ with tab_imx:
                 height=400,
                 column_config={
                     "HardwareID":                   st.column_config.TextColumn("Hardware ID"),
+                    "IDNode":                       st.column_config.NumberColumn("IDNode"),
                     "MachineID":                    st.column_config.NumberColumn("Machine ID"),
                     "MachineName":                  st.column_config.TextColumn("Equipamento"),
                     "BatteryLevel":                 st.column_config.TextColumn("Bateria"),
@@ -2132,7 +2163,7 @@ with tab_imx:
                     "TaxaConsumoBateria":           st.column_config.TextColumn("Taxa Consumo Bat."),
                 },
             )
-
+ 
             # Exportação CSV
             csv_imx = df_imx.to_csv(index=False).encode("utf-8")
             st.download_button(
@@ -2142,7 +2173,7 @@ with tab_imx:
                 mime="text/csv",
                 type="primary",
             )
-
+ 
             # Log do último scan
             if st.session_state.imx_log:
                 with st.expander("📋  Log da Varredura"):
