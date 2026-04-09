@@ -309,9 +309,9 @@ for key, default in {
     "selected_point": None,
     "imx_df":         None,
     "imx_log":        [],
-    "base_url":       "http://services.repcenter.skf.com",
-    "username":       "patrick.coelho",
-    "_password":      "REMOVIDO",
+    "base_url":       "",
+    "username":       "",
+    "_password":      "",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
