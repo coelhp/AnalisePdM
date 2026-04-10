@@ -21,6 +21,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ─────────────────────────────────────────────
+# CSS GLOBAL — LDC Brand Theme
+# ─────────────────────────────────────────────
+# Paleta principal LDC
+#   --accent  : LDC Blue    #32556E  (tom de comando, destaque primário)
+#   --accent2 : #007CAA     (azul vivo — hover, links)
+#   --accent3 : #A7C5E2     (azul claro — fills suaves)
+#   --ok      : LDC Green   #4E9D2D  (sucesso / normal)
+#   --ok-deep : #247F3B     (verde escuro — ênfase de sucesso)
+#   --warn    : #BA944B     (âmbar LDC — alertas)
+#   --danger  : #F06A22     (laranja LDC — crítico)
+#   --teal    : #379A8D     (saúde / secundário)
+#   --bg-base : derivado do LDC Blue escurecido
+#   --grey    : LDC Grey    #5C6670
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@300;400;600&display=swap');
@@ -348,6 +363,7 @@ for key, default in {
     "base_url":       "http://services.repcenter.skf.com",
     "username":       "patrick.coelho",
     "_password":      "",
+    "selected_unit":  None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1542,39 +1558,109 @@ with st.sidebar:
     st.markdown("""
     <div style="padding:16px 0 8px;">
         <div style="font-family:'Rajdhani',sans-serif;font-size:1.4rem;font-weight:700;
-                    letter-spacing:3px;text-transform:uppercase;color:#e6edf3;">
+                    letter-spacing:3px;text-transform:uppercase;color:#EEF4F9;">
             ⚙ SKF Observer
         </div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:0.68rem;
-                    color:#00d9ff;letter-spacing:2px;">PHOENIX API v2.0</div>
+                    color:#A7C5E2;letter-spacing:2px;">PHOENIX API v2.0</div>
     </div>
-    <hr style="border-color:#21262d;margin:8px 0 20px 0;">
+    <hr style="border-color:#2a3f52;margin:8px 0 16px 0;">
     """, unsafe_allow_html=True)
- 
-    st.markdown('<div class="sidebar-label">Servidor</div>', unsafe_allow_html=True)
-    base_url = st.text_input("", value=st.session_state.base_url,
-                              placeholder="http://127.0.0.1:14050", label_visibility="collapsed")
-    st.session_state.base_url = base_url
- 
-    st.markdown('<div class="sidebar-label" style="margin-top:12px;">Usuário</div>', unsafe_allow_html=True)
-    username = st.text_input("", value=st.session_state.username, label_visibility="collapsed")
- 
+
+    # ── Seletor de Unidade ───────────────────────
+    UNITS = {
+        "Cidade 1":      ("81818", "http://services.repcenter.skf.com:81818"),
+        "Cidade 2":          ("81818", "http://services.repcenter.skf.com:81818"),
+        "Cidade 3":              ("81818", "http://services.repcenter.skf.com:81818"),
+        "Cidade 4": ("81818", "http://services.repcenter.skf.com:81818"),
+        "Cidade 5":       ("81818", "http://services.repcenter.skf.com:81818"),
+    }
+
+    st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
+
+    for unit_name, (port, unit_url) in UNITS.items():
+        is_active = st.session_state.selected_unit == unit_name
+        # Botão com estilo diferenciado quando selecionado
+        btn_style = (
+            "background:var(--accent-solid) !important;"
+            "color:#EEF4F9 !important;"
+            "border-color:var(--accent-solid) !important;"
+        ) if is_active else ""
+        # Injetar estilo via chave única
+        btn_key = f"unit_{port}"
+        if is_active:
+            st.markdown(
+                f'<style>div[data-testid="stButton"] '
+                f'button[kind="secondary"]#{btn_key}'
+                f'{{background:var(--accent-solid)!important;'
+                f'color:#EEF4F9!important;}}</style>',
+                unsafe_allow_html=True,
+            )
+        if st.button(
+            f"{'▶ ' if is_active else '   '}{unit_name}",
+            key=btn_key,
+            use_container_width=True,
+        ):
+            if st.session_state.selected_unit != unit_name:
+                # Troca de unidade: limpa todo o estado de dados
+                st.session_state.selected_unit  = unit_name
+                st.session_state.base_url       = unit_url
+                st.session_state.token          = None
+                st.session_state.token_ts       = None
+                st.session_state.assets         = []
+                st.session_state.points         = []
+                st.session_state.trend_df       = None
+                st.session_state.spectrum_data  = None
+                st.session_state.selected_asset = None
+                st.session_state.selected_point = None
+                st.session_state.imx_df         = None
+                st.session_state.imx_log        = []
+                st.session_state.fleet_data     = None
+                st.session_state.fleet_log      = []
+                st.rerun()
+
+    # URL ativa — exibe apenas, sem campo editável por padrão
+    st.markdown(
+        f'<div style="font-family:Share Tech Mono,monospace;font-size:0.68rem;'
+        f'color:#4a5a6a;word-break:break-all;margin:4px 0 12px 0;padding:6px 8px;'
+        f'background:#162130;border-radius:4px;border:1px solid #2a3f52;">'
+        f'{st.session_state.base_url}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+    # ── Credenciais ──────────────────────────────
+    st.markdown('<div class="sidebar-label">Usuário</div>', unsafe_allow_html=True)
+    username = st.text_input("", value=st.session_state.username, label_visibility="collapsed",
+                              key="sidebar_username")
+
     st.markdown('<div class="sidebar-label" style="margin-top:12px;">Senha</div>', unsafe_allow_html=True)
-    password = st.text_input("", type="password", placeholder="••••••••", label_visibility="collapsed")
- 
-    if st.button("🔌  Conectar", use_container_width=True):
+    password = st.text_input("", type="password", placeholder="••••••••", label_visibility="collapsed",
+                              key="sidebar_password")
+
+    # Mostra qual unidade está selecionada
+    if st.session_state.selected_unit:
+        st.markdown(
+            f'<div style="font-family:Share Tech Mono,monospace;font-size:0.7rem;'
+            f'color:#98C0B8;margin:8px 0 4px;letter-spacing:1px;">'
+            f'📍 {st.session_state.selected_unit}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if st.button("🔌  Conectar", use_container_width=True, key="btn_connect"):
         with st.spinner("Autenticando..."):
             try:
+                base_url = st.session_state.base_url
                 token = autenticar(base_url, username, password)
                 import time as _time
-                st.session_state.token    = token
-                st.session_state.token_ts = _time.time()
-                st.session_state.username = username
+                st.session_state.token     = token
+                st.session_state.token_ts  = _time.time()
+                st.session_state.username  = username
                 st.session_state._password = password
                 assets = get_assets(base_url, token)
-                st.session_state.assets   = assets
-                st.session_state.points   = []
-                st.session_state.trend_df = None
+                st.session_state.assets         = assets
+                st.session_state.points         = []
+                st.session_state.trend_df       = None
                 st.session_state.selected_asset = None
                 st.session_state.selected_point = None
                 st.success(f"✅ Conectado! {len(assets)} asset(s) encontrado(s).")
@@ -1584,30 +1670,30 @@ with st.sidebar:
                 st.error(f"❌ Erro HTTP {e.response.status_code}")
             except Exception as e:
                 st.error(f"❌ {e}")
- 
-    # Status de conexão
-    st.markdown('<hr style="border-color:#21262d;margin:20px 0;">', unsafe_allow_html=True)
+
+    # ── Status de conexão ────────────────────────
+    st.markdown('<hr style="border-color:#2a3f52;margin:16px 0;">', unsafe_allow_html=True)
     if st.session_state.token:
         st.markdown("""
         <div style="display:flex;align-items:center;gap:8px;">
-            <div style="width:8px;height:8px;background:#2ed573;border-radius:50%;
-                        box-shadow:0 0 8px #2ed573;"></div>
+            <div style="width:8px;height:8px;background:#4E9D2D;border-radius:50%;
+                        box-shadow:0 0 8px #4E9D2D;"></div>
             <span style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;
-                         color:#8b949e;letter-spacing:1px;">CONECTADO</span>
+                         color:#98C0B8;letter-spacing:1px;">CONECTADO</span>
         </div>""", unsafe_allow_html=True)
     else:
         st.markdown("""
         <div style="display:flex;align-items:center;gap:8px;">
-            <div style="width:8px;height:8px;background:#484f58;border-radius:50%;"></div>
+            <div style="width:8px;height:8px;background:#4a5a6a;border-radius:50%;"></div>
             <span style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;
-                         color:#484f58;letter-spacing:1px;">DESCONECTADO</span>
+                         color:#4a5a6a;letter-spacing:1px;">DESCONECTADO</span>
         </div>""", unsafe_allow_html=True)
- 
-    # Filtros de data (visível só quando conectado)
+
+    # ── Filtros de data ──────────────────────────
     if st.session_state.token:
-        st.markdown('<hr style="border-color:#21262d;margin:20px 0;">', unsafe_allow_html=True)
+        st.markdown('<hr style="border-color:#2a3f52;margin:16px 0;">', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-label">Período de tendência</div>', unsafe_allow_html=True)
- 
+
         today = datetime.now(timezone.utc).date()
         date_from = st.date_input("De", value=today - timedelta(days=90), label_visibility="visible")
         date_to   = st.date_input("Até", value=today, label_visibility="visible")
@@ -1616,6 +1702,7 @@ with st.sidebar:
         st.session_state["date_from"] = date_from
         st.session_state["date_to"]   = date_to
         st.session_state["max_read"]  = max_read
+
  
  
 # ─────────────────────────────────────────────
