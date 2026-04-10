@@ -347,7 +347,7 @@ for key, default in {
     "fleet_log":      [],
     "base_url":       "http://services.repcenter.skf.com",
     "username":       "patrick.coelho",
-    "_password":      "PASSWORD",
+    "_password":      "",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1188,13 +1188,32 @@ def run_fleet_scan(base_url: str, username: str, password: str,
                 diag_code = 0
             diag_flags = [label for bit, label in DIAG_BITS.items() if diag_code & bit]
 
-            conn_state = s.get("ConnectionState") or s.get("connectionState") or "—"
+            conn_state_raw = s.get("ConnectionState") or s.get("connectionState")
+            try:
+                conn_state_code = int(conn_state_raw) if conn_state_raw is not None else None
+            except (ValueError, TypeError):
+                conn_state_code = None
+
+            # OPC UA ConnectionState codes (nextgensensor):
+            #   0 → Desconectado / Não Comissionado  (crítico)
+            #   1 → Conectado                        (normal)
+            #   2 → Sem Medição                      (aviso)
+            #   3 → Conectado — Sem Medição           (aviso)
+            CONN_STATE_LABELS = {
+                0: "Desconectado",
+                1: "Conectado",
+                2: "Sem Medição",
+                3: "Conectado — Sem Medição",
+            }
+            conn_state = CONN_STATE_LABELS.get(conn_state_code, f"Desconhecido ({conn_state_raw})")
 
             # Nível de alerta
-            if conn_state in ("Unreachable", "unreachable") or (dias_offline and dias_offline > 2):
+            if conn_state_code == 0 or (dias_offline and dias_offline > 2):
                 alert_level = "danger"
             elif bat is not None and bat < 20:
                 alert_level = "danger"
+            elif conn_state_code in (2, 3):
+                alert_level = "warn"
             elif 512 in [b for b in DIAG_BITS if diag_code & b]:
                 alert_level = "warn"
             elif bat is not None and bat < 40:
@@ -2794,8 +2813,10 @@ with tab_fleet:
                        if not df_sens.empty and "DiagnosticCode" in df_sens else 0
         n_bat_crit   = int((df_sens["BatteryLevel"].dropna() < 20).sum()) \
                        if not df_sens.empty and "BatteryLevel" in df_sens else 0
-        n_unreachable = int((df_sens["ConnectionState"]
-                             .str.lower().str.contains("unreachable", na=False)).sum()) \
+        n_desconectados = int((df_sens["ConnectionState"] == "Desconectado").sum()) \
+                        if not df_sens.empty and "ConnectionState" in df_sens else 0
+        n_sem_medicao = int((df_sens["ConnectionState"].isin(
+                                ["Sem Medição", "Conectado — Sem Medição"])).sum()) \
                         if not df_sens.empty and "ConnectionState" in df_sens else 0
 
         # KPIs de dispositivos
@@ -2825,10 +2846,15 @@ with tab_fleet:
                 <div class="value">{n_instab}</div>
                 <div class="unit">sensores com erro 512 (mesh)</div>
             </div>
-            <div class="metric-card {"danger" if n_unreachable > 0 else "ok"}">
-                <div class="label">Inacessíveis</div>
-                <div class="value">{n_unreachable}</div>
-                <div class="unit">sensores Unreachable</div>
+            <div class="metric-card {"danger" if n_desconectados > 0 else "ok"}">
+                <div class="label">Desconectados</div>
+                <div class="value">{n_desconectados}</div>
+                <div class="unit">estado OPC UA 0</div>
+            </div>
+            <div class="metric-card {"warn" if n_sem_medicao > 0 else "ok"}">
+                <div class="label">Sem Medição</div>
+                <div class="value">{n_sem_medicao}</div>
+                <div class="unit">estados OPC UA 2 e 3</div>
             </div>
             <div class="metric-card {bat_cls}">
                 <div class="label">Bateria Crítica</div>
@@ -2852,8 +2878,10 @@ with tab_fleet:
         alertas = []
         if n_gw_offline > 0:
             alertas.append(("danger", f"🔴 {n_gw_offline} gateway(s) OFFLINE — verificar conectividade de rede."))
-        if n_unreachable > 0:
-            alertas.append(("danger", f"🚨 {n_unreachable} sensor(es) inacessível(is) (Unreachable)."))
+        if n_desconectados > 0:
+            alertas.append(("danger", f"🚨 {n_desconectados} sensor(es) Desconectado(s) (OPC UA 0) — verificar comissionamento ou falha de hardware."))
+        if n_sem_medicao > 0:
+            alertas.append(("warn", f"⚠ {n_sem_medicao} sensor(es) Sem Medição (OPC UA 2/3) — comunicação presente mas sem dados."))
         if n_bat_crit > 0:
             alertas.append(("danger", f"🪫 {n_bat_crit} sensor(es) com bateria abaixo de 20% — substituição urgente."))
         if n_dev_fail > 0:
@@ -2915,10 +2943,10 @@ with tab_fleet:
                     cs_counts = df_sens["ConnectionState"].value_counts().reset_index()
                     cs_counts.columns = ["Estado", "Qtd"]
                     color_map = {
-                        "Connected":   "#4E9D2D",
-                        "connected":   "#4E9D2D",
-                        "Unreachable": "#F06A22",
-                        "unreachable": "#F06A22",
+                        "Conectado":              "#4E9D2D",
+                        "Desconectado":           "#F06A22",
+                        "Sem Medição":            "#BA944B",
+                        "Conectado — Sem Medição": "#708EB4",
                     }
                     bar_colors = [color_map.get(s, "#BA944B") for s in cs_counts["Estado"]]
 
