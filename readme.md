@@ -237,15 +237,15 @@ README.md             # Este arquivo
 |---|---|---|
 | `--bg-base` | `#0e1820` | Fundo principal |
 | `--bg-card` | `#162130` | Cards e painéis |
-| `--accent-solid` | `#32556E` | LDC Blue — bordas, botões |
-| `--accent` | `#A7C5E2` | LDC Blue claro — valores, texto de destaque |
+| `--accent-solid` | `#32556E` | Blue — bordas, botões |
+| `--accent` | `#A7C5E2` | Blue claro — valores, texto de destaque |
 | `--accent-deep` | `#007CAA` | Azul vivo — hover |
-| `--ok` | `#4E9D2D` | LDC Green — normal / sucesso |
+| `--ok` | `#4E9D2D` | Green — normal / sucesso |
 | `--warn` | `#BA944B` | Âmbar — aviso |
 | `--danger` | `#F06A22` | Laranja — crítico |
 | `--teal` | `#379A8D` | Teal — informação / saúde |
 | `--purple` | `#5E699E` | Eixo secundário (RPM) |
-| `--grey` | `#5C6670` | LDC Grey |
+| `--grey` | `#5C6670` | Grey |
 | `--text-mid` | `#98C0B8` | Texto médio / labels |
 
 ---
