@@ -1,0 +1,9 @@
+# SKF Observer Phoenix — Dashboard de Monitoramento
+# Instale com: pip install -r requirements.txt
+
+streamlit>=1.32.0
+requests>=2.31.0
+pandas>=2.1.0
+plotly>=5.18.0
+numpy>=1.26.0
+networkx>=3.2
