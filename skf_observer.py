@@ -11,6 +11,11 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timezone, timedelta
 import numpy as np
+try:
+    import networkx as nx
+    HAS_NX = True
+except ImportError:
+    HAS_NX = False
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -22,20 +27,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────
-# CSS GLOBAL — LDC Brand Theme
-# ─────────────────────────────────────────────
-# Paleta principal LDC
-#   --accent  : LDC Blue    #32556E  (tom de comando, destaque primário)
-#   --accent2 : #007CAA     (azul vivo — hover, links)
-#   --accent3 : #A7C5E2     (azul claro — fills suaves)
-#   --ok      : LDC Green   #4E9D2D  (sucesso / normal)
-#   --ok-deep : #247F3B     (verde escuro — ênfase de sucesso)
-#   --warn    : #BA944B     (âmbar LDC — alertas)
-#   --danger  : #F06A22     (laranja LDC — crítico)
-#   --teal    : #379A8D     (saúde / secundário)
-#   --bg-base : derivado do LDC Blue escurecido
-#   --grey    : LDC Grey    #5C6670
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@300;400;600&display=swap');
@@ -360,6 +351,8 @@ for key, default in {
     "imx_log":        [],
     "fleet_data":     None,
     "fleet_log":      [],
+    "mesh_data":      None,
+    "mesh_log":       [],
     "base_url":       "http://services.repcenter.skf.com",
     "username":       "patrick.coelho",
     "_password":      "",
@@ -1554,6 +1547,460 @@ def run_imx_scan(base_url: str, username: str, password: str,
 # ─────────────────────────────────────────────
 # SIDEBAR — Conexão
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# MESH GRAPH — HELPERS E CONSTRUÇÃO
+# ─────────────────────────────────────────────
+
+# Limiar de qualidade do ParentLinkMetric
+LINK_GOOD    = 1.7   # ≤ 1.7  → excelente ()
+LINK_WARN    = 2.5   # ≤ 2.5  → atenção   ()
+# > 2.5 → crítico (laranja LDC)
+
+LINK_COLOR_GOOD   = "#4E9D2D"
+LINK_COLOR_WARN   = "#BA944B"
+LINK_COLOR_CRIT   = "#F06A22"
+
+CONN_STATE_LABELS_GR = {
+    0: "Desconectado",
+    1: "Conectado",
+    2: "Sem Medição",
+    3: "Conectado — Sem Medição",
+}
+
+
+def get_gateways_mesh(base_url: str, token: str) -> list:
+    """GET /v1/gateways — id, name, hardwareId."""
+    resp = requests.get(
+        f"{base_url}/v1/gateways",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=15,
+    )
+    if resp.status_code in (204, 404):
+        return []
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else data.get("value", data.get("items", []))
+
+
+def get_sensors_mesh(base_url: str, token: str) -> list:
+    """GET /v1/nextgensensor — IDNode, IDMeshParent, ParentLinkMetric, etc."""
+    resp = requests.get(
+        f"{base_url}/v1/nextgensensor",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=15,
+    )
+    if resp.status_code in (204, 404):
+        return []
+    resp.raise_for_status()
+    data = resp.json()
+    return data if isinstance(data, list) else data.get("value", data.get("items", []))
+
+
+def build_mesh_graph(gateways: list, sensors: list) -> dict:
+    """
+    Constrói o grafo NetworkX da rede mesh e calcula métricas por nó.
+
+    Retorna dict com:
+      graph       → nx.DiGraph (arestas: filho → pai)
+      node_meta   → {node_id: {...atributos...}}
+      gateway_ids → set de IDs de gateways
+      df_nodes    → DataFrame com métricas por nó (hops, estado, etc.)
+    """
+    if not HAS_NX:
+        return None
+
+    G = nx.DiGraph()
+    node_meta = {}
+    gateway_ids = set()
+
+    # ── Nós: Gateways ─────────────────────────
+    for gw in gateways:
+        gid  = gw.get("id") or gw.get("ID")
+        name = gw.get("name") or gw.get("Name") or f"GW-{gid}"
+        hwid = gw.get("hardwareId") or gw.get("HardwareId") or "—"
+        if gid is None:
+            continue
+        gid = int(gid)
+        gateway_ids.add(gid)
+        G.add_node(gid)
+        node_meta[gid] = {
+            "label":      name,
+            "hw_id":      hwid,
+            "type":       "gateway",
+            "conn_state": 1,
+            "conn_label": "Conectado",
+            "battery":    None,
+            "location":   "",
+            "link_metric": None,
+            "alert":      "ok",
+        }
+
+    # ── Nós: Sensores ──────────────────────────
+    for s in sensors:
+        nid = s.get("IDNode") or s.get("idNode")
+        if nid is None:
+            continue
+        nid    = int(nid)
+        parent = s.get("IDMeshParent") or s.get("idMeshParent")
+        try:
+            parent = int(parent) if parent is not None else None
+        except (ValueError, TypeError):
+            parent = None
+
+        link_metric = s.get("ParentLinkMetric") or s.get("parentLinkMetric")
+        try:
+            link_metric = float(link_metric) if link_metric is not None else None
+        except (ValueError, TypeError):
+            link_metric = None
+
+        conn_raw = s.get("ConnectionState") or s.get("connectionState")
+        try:
+            conn_code = int(conn_raw) if conn_raw is not None else None
+        except (ValueError, TypeError):
+            conn_code = None
+        conn_label = CONN_STATE_LABELS_GR.get(conn_code, f"? ({conn_raw})")
+
+        bat = s.get("BatteryLevel") or s.get("batteryLevel")
+        try:
+            bat = float(bat) if bat is not None else None
+        except (ValueError, TypeError):
+            bat = None
+
+        hw_id    = s.get("SensorIdentifier") or s.get("sensorIdentifier") or "—"
+        location = s.get("LocationTag") or s.get("locationTag") or ""
+
+        # Nível de alerta
+        if conn_code == 0:
+            alert = "danger"
+        elif conn_code in (2, 3):
+            alert = "warn"
+        elif bat is not None and bat < 20:
+            alert = "danger"
+        elif bat is not None and bat < 40:
+            alert = "warn"
+        else:
+            alert = "ok"
+
+        G.add_node(nid)
+        node_meta[nid] = {
+            "label":       hw_id,
+            "hw_id":       hw_id,
+            "type":        "sensor",
+            "parent":      parent,
+            "conn_state":  conn_code,
+            "conn_label":  conn_label,
+            "battery":     bat,
+            "location":    location,
+            "link_metric": link_metric,
+            "alert":       alert,
+        }
+
+        # Aresta filho → pai
+        if parent is not None and parent != nid:
+            # Cor da aresta pelo ParentLinkMetric
+            if link_metric is None:
+                edge_color = "#4a5a6a"
+            elif link_metric <= LINK_GOOD:
+                edge_color = LINK_COLOR_GOOD
+            elif link_metric <= LINK_WARN:
+                edge_color = LINK_COLOR_WARN
+            else:
+                edge_color = LINK_COLOR_CRIT
+
+            G.add_edge(nid, parent, weight=link_metric, color=edge_color)
+
+    # ── Hops até o gateway (caminho mais curto no grafo invertido) ──
+    # Usamos o grafo não-dirigido para BFS simples
+    G_undir = G.to_undirected()
+    hops = {}
+    for gid in gateway_ids:
+        if gid in G_undir:
+            lengths = nx.single_source_shortest_path_length(G_undir, gid)
+            for node, dist in lengths.items():
+                if node not in hops or dist < hops[node]:
+                    hops[node] = dist
+
+    # ── Identifica nós Mesh vs Leaf ────────────────────────────────
+    # Nó Mesh: tem pelo menos um filho (outro sensor aponta para ele)
+    children_count = {}
+    for nid in G.nodes():
+        children_count[nid] = 0
+    for u, v in G.edges():
+        children_count[v] = children_count.get(v, 0) + 1
+
+    # ── Monta DataFrame de nós ─────────────────────────────────────
+    rows = []
+    for nid, meta in node_meta.items():
+        hop = hops.get(nid)
+        is_mesh = children_count.get(nid, 0) > 0 and meta["type"] == "sensor"
+        rows.append({
+            "NodeID":       nid,
+            "Label":        meta["label"],
+            "HardwareID":   meta["hw_id"],
+            "Type":         meta["type"],
+            "Role":         "Mesh" if is_mesh else ("Gateway" if meta["type"] == "gateway" else "Leaf"),
+            "Parent":       meta.get("parent"),
+            "ConnState":    meta["conn_label"],
+            "Battery":      meta["battery"],
+            "Location":     meta["location"],
+            "LinkMetric":   meta["link_metric"],
+            "Hops":         hop,
+            "ChildCount":   children_count.get(nid, 0),
+            "Alert":        meta["alert"],
+        })
+
+    df_nodes = pd.DataFrame(rows)
+
+    return {
+        "graph":       G,
+        "node_meta":   node_meta,
+        "gateway_ids": gateway_ids,
+        "hops":        hops,
+        "children_count": children_count,
+        "df_nodes":    df_nodes,
+    }
+
+
+def _hierarchy_pos(G, roots, width=1.0, vert_gap=1.8, x_center=0.5):
+    """
+    Layout hierárquico top-down para múltiplas raízes.
+    Retorna dict {node: (x, y)}.
+    """
+    pos = {}
+
+    def _place(node, visited, x_left, x_right, depth):
+        if node in visited:
+            return
+        visited.add(node)
+        # filhos = predecessores no DiGraph (arestas vão filho→pai, então revertemos)
+        children = [n for n in G.predecessors(node) if n not in visited]
+        x_mid = (x_left + x_right) / 2
+        pos[node] = (x_mid, -depth * vert_gap)
+        if children:
+            span = (x_right - x_left) / len(children)
+            for i, child in enumerate(children):
+                _place(child, visited, x_left + i * span, x_left + (i + 1) * span, depth + 1)
+
+    visited = set()
+    root_span = width / max(len(roots), 1)
+    for i, root in enumerate(roots):
+        _place(root, visited, i * root_span, (i + 1) * root_span, 0)
+
+    # Posiciona nós órfãos (sem caminho até nenhum gateway)
+    orphans = [n for n in G.nodes() if n not in pos]
+    for j, orp in enumerate(orphans):
+        pos[orp] = (width + 0.5 + j * 0.8, 0)
+
+    return pos
+
+
+def build_mesh_figure(mesh: dict, filter_location: str = "") -> go.Figure:
+    """
+    Constrói o Plotly Figure do grafo mesh com layout hierárquico.
+    """
+    if mesh is None:
+        return go.Figure()
+
+    G          = mesh["graph"]
+    node_meta  = mesh["node_meta"]
+    gateway_ids = mesh["gateway_ids"]
+    hops       = mesh["hops"]
+    children_count = mesh["children_count"]
+
+    # Filtro por LocationTag
+    if filter_location:
+        visible_nodes = {
+            nid for nid, m in node_meta.items()
+            if filter_location.lower() in m.get("location", "").lower()
+            or m["type"] == "gateway"
+        }
+        sub_nodes = list(visible_nodes)
+        G = G.subgraph(sub_nodes).copy()
+
+    # Layout hierárquico
+    roots = [gid for gid in gateway_ids if gid in G.nodes()]
+    if not roots:
+        roots = [n for n in G.nodes() if G.in_degree(n) == 0]
+    pos = _hierarchy_pos(G, roots, width=max(len(G.nodes()) * 0.4, 4.0))
+
+    # ── Arestas ────────────────────────────────────────────────────
+    edge_traces = []
+    for u, v, data in G.edges(data=True):
+        if u not in pos or v not in pos:
+            continue
+        x0, y0 = pos[u]
+        x1, y1 = pos[v]
+        color  = data.get("color", "#4a5a6a")
+        metric = data.get("weight")
+        is_mesh_edge = children_count.get(u, 0) > 0  # u roteia outros
+
+        edge_traces.append(go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None],
+            mode="lines",
+            line=dict(
+                color=color,
+                width=2.5 if is_mesh_edge else 1.2,
+                dash="solid" if is_mesh_edge else "dot",
+            ),
+            hoverinfo="text",
+            hovertext=f"Métrica: {metric:.2f}" if metric is not None else "Métrica: —",
+            showlegend=False,
+        ))
+
+        # Seta no meio da aresta
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        edge_traces.append(go.Scatter(
+            x=[mx], y=[my],
+            mode="markers",
+            marker=dict(symbol="arrow", size=9, color=color,
+                        angleref="previous", angle=0),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+
+    # ── Nós ────────────────────────────────────────────────────────
+    ALERT_NODE_COLOR = {"ok": "#32556E", "warn": "#BA944B", "danger": "#F06A22"}
+    ALERT_BORDER     = {"ok": "#A7C5E2", "warn": "#BA944B", "danger": "#F06A22"}
+
+    gw_x, gw_y, gw_text, gw_hover, gw_color, gw_border = [], [], [], [], [], []
+    leaf_x, leaf_y, leaf_text, leaf_hover, leaf_color, leaf_border = [], [], [], [], [], []
+    mesh_x, mesh_y, mesh_text, mesh_hover, mesh_color, mesh_border = [], [], [], [], [], []
+
+    for nid in G.nodes():
+        if nid not in pos:
+            continue
+        meta  = node_meta.get(nid, {})
+        x, y  = pos[nid]
+        alert = meta.get("alert", "ok")
+        bat   = meta.get("battery")
+        hop   = hops.get(nid, "?")
+        label = meta.get("label", str(nid))[:14]
+        conn  = meta.get("conn_label", "—")
+        loc   = meta.get("location", "")
+        metric = meta.get("link_metric")
+
+        # Opacidade reduzida para desconectados
+        opacity = 0.3 if meta.get("conn_state") == 0 else 1.0
+
+        hover = (
+            f"<b>{meta.get('label', nid)}</b><br>"
+            f"ID: {nid}<br>"
+            f"Tipo: {meta.get('type','?').title()}<br>"
+            f"Estado: {conn}<br>"
+            + (f"Bateria: {bat:.0f}%<br>" if bat is not None else "")
+            + (f"Hops: {hop}<br>" if hop != "?" else "")
+            + (f"Métrica link: {metric:.2f}<br>" if metric else "")
+            + (f"Local: {loc}" if loc else "")
+        )
+
+        nc = ALERT_NODE_COLOR[alert]
+        bc = ALERT_BORDER[alert]
+
+        # Ícone de bateria no label
+        if meta.get("type") == "sensor":
+            bat_icon = "" if bat is None else ("🔋" if bat >= 70 else ("🪫" if bat >= 40 else "⚠"))
+            display_label = f"{bat_icon} {label}"
+        else:
+            display_label = f"⬡ {label}"
+
+        if meta.get("type") == "gateway":
+            gw_x.append(x); gw_y.append(y)
+            gw_text.append(display_label); gw_hover.append(hover)
+            gw_color.append(nc); gw_border.append(bc)
+        elif children_count.get(nid, 0) > 0:
+            mesh_x.append(x); mesh_y.append(y)
+            mesh_text.append(display_label); mesh_hover.append(hover)
+            mesh_color.append(nc); mesh_border.append(bc)
+        else:
+            leaf_x.append(x); leaf_y.append(y)
+            leaf_text.append(display_label); leaf_hover.append(hover)
+            leaf_color.append(nc); leaf_border.append(bc)
+
+    node_traces = []
+
+    # Gateways — pentágono
+    if gw_x:
+        node_traces.append(go.Scatter(
+            x=gw_x, y=gw_y,
+            mode="markers+text",
+            name="Gateway",
+            marker=dict(symbol="pentagon", size=28,
+                        color=gw_color, line=dict(color=gw_border, width=2.5)),
+            text=gw_text, textposition="bottom center",
+            textfont=dict(family="Share Tech Mono, monospace", size=9, color="#EEF4F9"),
+            hovertext=gw_hover, hoverinfo="text",
+        ))
+
+    # Sensores Mesh — círculo grande
+    if mesh_x:
+        node_traces.append(go.Scatter(
+            x=mesh_x, y=mesh_y,
+            mode="markers+text",
+            name="Sensor Mesh",
+            marker=dict(symbol="circle", size=18,
+                        color=mesh_color, line=dict(color=mesh_border, width=2)),
+            text=mesh_text, textposition="bottom center",
+            textfont=dict(family="Share Tech Mono, monospace", size=8, color="#EEF4F9"),
+            hovertext=mesh_hover, hoverinfo="text",
+        ))
+
+    # Sensores Leaf — círculo pequeno
+    if leaf_x:
+        node_traces.append(go.Scatter(
+            x=leaf_x, y=leaf_y,
+            mode="markers+text",
+            name="Sensor Leaf",
+            marker=dict(symbol="circle", size=12,
+                        color=leaf_color, line=dict(color=leaf_border, width=1.5)),
+            text=leaf_text, textposition="bottom center",
+            textfont=dict(family="Share Tech Mono, monospace", size=7, color="#98C0B8"),
+            hovertext=leaf_hover, hoverinfo="text",
+        ))
+
+    # Legenda de métrica de link (traces invisíveis)
+    legend_traces = [
+        go.Scatter(x=[None], y=[None], mode="lines", name="Link ≤1.7 (Excelente)",
+                   line=dict(color=LINK_COLOR_GOOD, width=3)),
+        go.Scatter(x=[None], y=[None], mode="lines", name="Link 1.7–2.5 (Atenção)",
+                   line=dict(color=LINK_COLOR_WARN, width=3)),
+        go.Scatter(x=[None], y=[None], mode="lines", name="Link >2.5 (Crítico)",
+                   line=dict(color=LINK_COLOR_CRIT, width=3)),
+        go.Scatter(x=[None], y=[None], mode="markers", name="Sensor Mesh (roteia)",
+                   marker=dict(symbol="circle", size=14, color="#32556E",
+                               line=dict(color="#A7C5E2", width=2))),
+        go.Scatter(x=[None], y=[None], mode="markers", name="Sensor Leaf (extremidade)",
+                   marker=dict(symbol="circle", size=9, color="#32556E",
+                               line=dict(color="#A7C5E2", width=1.5))),
+        go.Scatter(x=[None], y=[None], mode="markers", name="Gateway",
+                   marker=dict(symbol="pentagon", size=18, color="#007CAA",
+                               line=dict(color="#A7C5E2", width=2))),
+    ]
+
+    fig = go.Figure(data=edge_traces + node_traces + legend_traces)
+    fig.update_layout(
+        paper_bgcolor="#0e1820",
+        plot_bgcolor="#162130",
+        font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+        title=dict(
+            text="<b>Topologia da Rede Mesh IMx-1</b>",
+            font=dict(family="Rajdhani, sans-serif", size=20, color="#EEF4F9"),
+            x=0.01,
+        ),
+        xaxis=dict(visible=False, showgrid=False, zeroline=False),
+        yaxis=dict(visible=False, showgrid=False, zeroline=False,
+                   scaleanchor="x", scaleratio=1),
+        legend=dict(
+            bgcolor="rgba(22,33,48,0.9)", bordercolor="#2a3f52", borderwidth=1,
+            font=dict(family="Exo 2, sans-serif", size=10, color="#A7C5E2"),
+            orientation="v", x=1.01, y=1, xanchor="left",
+        ),
+        hovermode="closest",
+        margin=dict(l=20, r=200, t=60, b=20),
+        height=680,
+    )
+    return fig
+
+
 with st.sidebar:
     st.markdown("""
     <div style="padding:16px 0 8px;">
@@ -1569,11 +2016,11 @@ with st.sidebar:
 
     # ── Seletor de Unidade ───────────────────────
     UNITS = {
-        "Cidade 1":      ("81818", "http://services.repcenter.skf.com:81818"),
-        "Cidade 2":          ("81818", "http://services.repcenter.skf.com:81818"),
-        "Cidade 3":              ("81818", "http://services.repcenter.skf.com:81818"),
-        "Cidade 4": ("81818", "http://services.repcenter.skf.com:81818"),
-        "Cidade 5":       ("81818", "http://services.repcenter.skf.com:81818"),
+        "Unidade A":      ("88888", "http://services.repcenter.skf.com:88888"),
+        "Unidade B":          ("88888", "http://services.repcenter.skf.com:88888"),
+        "Unidade C":              ("88888", "http://services.repcenter.skf.com:88888"),
+        "Unidade D": ("88888", "http://services.repcenter.skf.com:88888"),
+        "Unidade E":       ("88888", "http://services.repcenter.skf.com:88888"),
     }
 
     st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
@@ -1771,10 +2218,11 @@ if not st.session_state.token:
 # ─────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────
-tab_monitor, tab_imx, tab_fleet = st.tabs([
+tab_monitor, tab_imx, tab_fleet, tab_mesh = st.tabs([
     "📈  Monitor de Pontos",
     "🔬  IMx-1 Comissionamento",
     "🛰  Fleet Monitoring",
+    "🕸  Rede Mesh",
 ])
  
 # ══════════════════════════════════════════════
@@ -3408,3 +3856,294 @@ with tab_fleet:
         if st.session_state.fleet_log:
             with st.expander("📋  Log da Coleta de Frota"):
                 st.code("\n".join(st.session_state.fleet_log), language=None)
+# ══════════════════════════════════════════════
+# TAB 4 — REDE MESH
+# ══════════════════════════════════════════════
+with tab_mesh:
+
+    if not HAS_NX:
+        st.markdown("""
+        <div class="alert-warn">
+            ⚠  A biblioteca <code>networkx</code> não está instalada.<br>
+            Execute <code>pip install networkx</code> e reinicie o app.
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
+
+    st.markdown('<div class="section-title">Topologia da Rede Mesh IMx-1</div>',
+                unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="alert-info">
+        ℹ  Reconstrói o grafo de conectividade da rede mesh a partir dos campos
+        <code>IDNode</code> e <code>IDMeshParent</code> de cada sensor.
+        <strong>Pentágonos</strong> = Gateways &nbsp;·&nbsp;
+        <strong>Círculos grandes</strong> = Sensores Mesh (roteadores) &nbsp;·&nbsp;
+        <strong>Círculos pequenos</strong> = Sensores Leaf (extremidades).
+        Cor das conexões indica qualidade do link (<code>ParentLinkMetric</code>).
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Botões de controle ────────────────────
+    col_mb1, col_mb2 = st.columns([2, 1])
+    with col_mb1:
+        run_mesh = st.button("🕸  Carregar Grafo Mesh", use_container_width=True,
+                              type="primary", key="btn_mesh_load")
+    with col_mb2:
+        if st.button("🗑  Limpar", use_container_width=True, key="btn_mesh_clear"):
+            st.session_state.mesh_data = None
+            st.session_state.mesh_log  = []
+            st.rerun()
+
+    # ── Coleta de dados ───────────────────────
+    if run_mesh:
+        pw = st.session_state.get("_password", "")
+        if not pw:
+            st.error("❌ Senha não disponível — reconecte na barra lateral.")
+        else:
+            st.session_state.mesh_data = None
+            st.session_state.mesh_log  = []
+
+            mesh_prog    = st.progress(0.0, text="Coletando gateways…")
+            mesh_log_box = st.empty()
+            mesh_lines   = []
+
+            def _ml(msg):
+                mesh_lines.append(msg)
+                mesh_log_box.markdown(
+                    "<br>".join(
+                        f"<span style='font-family:Share Tech Mono,monospace;"
+                        f"font-size:0.75rem;color:#98C0B8;'>{l}</span>"
+                        for l in mesh_lines[-8:]
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            try:
+                base_url = st.session_state.base_url
+                token    = _ensure_token(base_url,
+                                         st.session_state.username,
+                                         pw)
+                _ml("🔑 Token obtido.")
+                mesh_prog.progress(0.2, "Coletando gateways…")
+
+                gateways = get_gateways_mesh(base_url, token)
+                _ml(f"📡 {len(gateways)} gateway(s) encontrado(s).")
+                mesh_prog.progress(0.5, "Coletando sensores…")
+
+                sensors  = get_sensors_mesh(base_url, token)
+                _ml(f"📶 {len(sensors)} sensor(es) encontrado(s).")
+                mesh_prog.progress(0.8, "Construindo grafo…")
+
+                mesh = build_mesh_graph(gateways, sensors)
+                st.session_state.mesh_data = mesh
+                st.session_state.mesh_log  = mesh_lines + [
+                    f"✅ Grafo: {mesh['graph'].number_of_nodes()} nós, "
+                    f"{mesh['graph'].number_of_edges()} arestas."
+                ]
+                mesh_prog.progress(1.0, "✅ Grafo construído")
+                mesh_log_box.empty()
+            except Exception as e:
+                st.error(f"❌ Erro ao construir grafo: {e}")
+
+    # ── Visualização ──────────────────────────
+    if st.session_state.mesh_data:
+        mesh     = st.session_state.mesh_data
+        G        = mesh["graph"]
+        df_nodes = mesh["df_nodes"]
+        today_u  = datetime.now(timezone.utc)
+
+        n_total    = G.number_of_nodes()
+        n_edges    = G.number_of_edges()
+        n_gw       = len(mesh["gateway_ids"])
+        n_mesh_s   = int((df_nodes["Role"] == "Mesh").sum())
+        n_leaf     = int((df_nodes["Role"] == "Leaf").sum())
+        n_danger   = int((df_nodes["Alert"] == "danger").sum())
+        n_warn     = int((df_nodes["Alert"] == "warn").sum())
+        max_hops   = int(df_nodes["Hops"].dropna().max()) if not df_nodes["Hops"].dropna().empty else 0
+
+        # ── KPI cards ────────────────────────
+        st.markdown(f"""
+        <div class="metric-row">
+            <div class="metric-card ok">
+                <div class="label">Nós no Grafo</div>
+                <div class="value">{n_total}</div>
+                <div class="unit">{n_edges} conexões mapeadas</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Gateways</div>
+                <div class="value">{n_gw}</div>
+                <div class="unit">raízes da rede</div>
+            </div>
+            <div class="metric-card teal">
+                <div class="label">Sensores Mesh</div>
+                <div class="value">{n_mesh_s}</div>
+                <div class="unit">nós roteadores</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Sensores Leaf</div>
+                <div class="value">{n_leaf}</div>
+                <div class="unit">extremidades</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Máx. Hops</div>
+                <div class="value">{max_hops}</div>
+                <div class="unit">saltos até o gateway</div>
+            </div>
+            <div class="metric-card {"danger" if n_danger > 0 else "ok"}">
+                <div class="label">Alertas</div>
+                <div class="value">{n_danger + n_warn}</div>
+                <div class="unit">{n_danger} crítico(s) · {n_warn} aviso(s)</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Filtros ───────────────────────────
+        col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+
+        locations = sorted(df_nodes["Location"].dropna().unique().tolist())
+        locations = [l for l in locations if l]
+        with col_f1:
+            loc_filter = st.selectbox(
+                "Filtrar por LocationTag",
+                ["Todos"] + locations,
+                key="mesh_loc_filter",
+            )
+        with col_f2:
+            alert_filter = st.selectbox(
+                "Filtrar por alerta",
+                ["Todos", "⛔ Crítico", "⚠ Aviso", "✔ Normal"],
+                key="mesh_alert_filter",
+            )
+        with col_f3:
+            show_orphans = st.checkbox("Mostrar órfãos", value=True, key="mesh_orphans")
+
+        # ── Grafo principal ───────────────────
+        loc_arg = "" if loc_filter == "Todos" else loc_filter
+        fig_mesh = build_mesh_figure(mesh, filter_location=loc_arg)
+        st.plotly_chart(fig_mesh, use_container_width=True)
+
+        # ── Distribuição de Hops (barras) ─────
+        df_hops = df_nodes[df_nodes["Type"] == "sensor"].dropna(subset=["Hops"])
+        if not df_hops.empty:
+            hop_counts = df_hops["Hops"].value_counts().sort_index().reset_index()
+            hop_counts.columns = ["Hops", "Sensores"]
+
+            hop_colors = []
+            for h in hop_counts["Hops"]:
+                if h <= 2:   hop_colors.append("#4E9D2D")
+                elif h <= 4: hop_colors.append("#BA944B")
+                else:        hop_colors.append("#F06A22")
+
+            fig_hops = go.Figure(go.Bar(
+                x=hop_counts["Hops"].astype(str),
+                y=hop_counts["Sensores"],
+                marker=dict(color=hop_colors,
+                            line=dict(color="rgba(255,255,255,0.1)", width=0.5)),
+                text=hop_counts["Sensores"],
+                textposition="outside",
+                textfont=dict(family="Share Tech Mono, monospace", size=11, color="#EEF4F9"),
+                hovertemplate="<b>%{x} hop(s)</b><br>%{y} sensor(es)<extra></extra>",
+            ))
+            fig_hops.update_layout(
+                paper_bgcolor="#0e1820", plot_bgcolor="#162130",
+                font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                title=dict(text="<b>Distribuição de Hops</b>  ·  Saltos até o Gateway",
+                           font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                           x=0.01),
+                xaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                           title=dict(text="Nº de Hops", font=dict(color="#98C0B8")),
+                           tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
+                yaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                           title=dict(text="Sensores", font=dict(color="#98C0B8")),
+                           tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
+                margin=dict(l=50, r=20, t=50, b=50),
+                height=280,
+            )
+
+            col_h1, col_h2 = st.columns([3, 2])
+            with col_h1:
+                st.plotly_chart(fig_hops, use_container_width=True)
+            with col_h2:
+                # Distribuição de LinkMetric
+                df_lm = df_nodes["LinkMetric"].dropna()
+                if not df_lm.empty:
+                    lm_colors = df_lm.apply(
+                        lambda v: "#4E9D2D" if v <= LINK_GOOD
+                                  else ("#BA944B" if v <= LINK_WARN else "#F06A22")
+                    )
+                    fig_lm = go.Figure(go.Histogram(
+                        x=df_lm, nbinsx=20,
+                        marker=dict(color=lm_colors.tolist(),
+                                    line=dict(color="#0e1820", width=0.5)),
+                        hovertemplate="Métrica: %{x:.2f}<br>Links: %{y}<extra></extra>",
+                    ))
+                    fig_lm.add_vline(x=LINK_GOOD, line=dict(color="#4E9D2D", width=1.5, dash="dot"),
+                                     annotation_text="1.7 excelente",
+                                     annotation_font=dict(color="#4E9D2D", size=9))
+                    fig_lm.add_vline(x=LINK_WARN, line=dict(color="#BA944B", width=1.5, dash="dot"),
+                                     annotation_text="2.5 crítico",
+                                     annotation_font=dict(color="#BA944B", size=9))
+                    fig_lm.update_layout(
+                        paper_bgcolor="#0e1820", plot_bgcolor="#162130",
+                        font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                        title=dict(text="<b>Distribuição — ParentLinkMetric</b>",
+                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                                   x=0.01),
+                        xaxis=dict(gridcolor="#2a3f52",
+                                   title=dict(text="Métrica de Link", font=dict(color="#98C0B8")),
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
+                        yaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                                   title=dict(text="Links", font=dict(color="#98C0B8")),
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
+                        margin=dict(l=50, r=20, t=50, b=50),
+                        height=280,
+                    )
+                    st.plotly_chart(fig_lm, use_container_width=True)
+
+        # ── Tabela detalhada ──────────────────
+        st.markdown('<div class="section-title">Detalhes dos Nós</div>', unsafe_allow_html=True)
+
+        df_show = df_nodes.copy()
+        if alert_filter == "⛔ Crítico":
+            df_show = df_show[df_show["Alert"] == "danger"]
+        elif alert_filter == "⚠ Aviso":
+            df_show = df_show[df_show["Alert"] == "warn"]
+        elif alert_filter == "✔ Normal":
+            df_show = df_show[df_show["Alert"] == "ok"]
+        if not show_orphans:
+            df_show = df_show[df_show["Hops"].notna()]
+
+        df_show = df_show.sort_values(["Type", "Hops", "Alert"],
+                                       ascending=[False, True, True])
+
+        st.dataframe(
+            df_show.drop(columns=["Alert"], errors="ignore"),
+            use_container_width=True,
+            hide_index=True,
+            height=380,
+            column_config={
+                "NodeID":     st.column_config.NumberColumn("Node ID"),
+                "Label":      st.column_config.TextColumn("Label"),
+                "HardwareID": st.column_config.TextColumn("Hardware ID"),
+                "Type":       st.column_config.TextColumn("Tipo"),
+                "Role":       st.column_config.TextColumn("Papel"),
+                "Parent":     st.column_config.NumberColumn("Parent ID"),
+                "ConnState":  st.column_config.TextColumn("Estado Conexão"),
+                "Battery":    st.column_config.ProgressColumn(
+                                  "Bateria", min_value=0, max_value=100, format="%.0f%%"),
+                "Location":   st.column_config.TextColumn("LocationTag"),
+                "LinkMetric": st.column_config.NumberColumn("Link Metric", format="%.2f"),
+                "Hops":       st.column_config.NumberColumn("Hops"),
+                "ChildCount": st.column_config.NumberColumn("Filhos"),
+            },
+        )
+
+        csv_mesh = df_show.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇  Exportar tabela CSV", data=csv_mesh,
+                           file_name=f"mesh_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                           mime="text/csv", key="dl_mesh")
+
+        if st.session_state.mesh_log:
+            with st.expander("📋  Log da Coleta"):
+                st.code("\n".join(st.session_state.mesh_log), language=None)
