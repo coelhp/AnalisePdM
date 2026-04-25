@@ -23,76 +23,43 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# CSS GLOBAL — LDC Brand Theme
+# CSS GLOBAL — Industrial Dark Theme
 # ─────────────────────────────────────────────
-# Paleta principal LDC
-#   --accent  : LDC Blue    #32556E  (tom de comando, destaque primário)
-#   --accent2 : #007CAA     (azul vivo — hover, links)
-#   --accent3 : #A7C5E2     (azul claro — fills suaves)
-#   --ok      : LDC Green   #4E9D2D  (sucesso / normal)
-#   --ok-deep : #247F3B     (verde escuro — ênfase de sucesso)
-#   --warn    : #BA944B     (âmbar LDC — alertas)
-#   --danger  : #F06A22     (laranja LDC — crítico)
-#   --teal    : #379A8D     (saúde / secundário)
-#   --bg-base : derivado do LDC Blue escurecido
-#   --grey    : LDC Grey    #5C6670
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@300;400;600&display=swap');
 
 :root {
-    /* ── Backgrounds ── */
-    --bg-base:      #0e1820;        /* LDC Blue escurecido */
-    --bg-card:      #162130;        /* card principal */
-    --bg-panel:     #1c2b3a;        /* painéis internos */
-
-    /* ── Bordas ── */
-    --border:       #2a3f52;
-    --border-glow:  #32556E;
-
-    /* ── Paleta LDC ── */
-    --accent:       #A7C5E2;        /* LDC Blue claro — destaque primário */
-    --accent-solid: #32556E;        /* LDC Blue sólido */
-    --accent-deep:  #007CAA;        /* azul vivo — hover */
+    --bg-base:      #090c10;
+    --bg-card:      #0d1117;
+    --bg-panel:     #161b22;
+    --border:       #21262d;
+    --border-glow:  #30363d;
+    --accent:       #00d9ff;
+    --accent-dim:   #0099bb;
     --accent-glow:  rgba(50,85,110,0.25);
-
-    --ok:           #4E9D2D;        /* LDC Green */
-    --ok-deep:      #247F3B;        /* verde escuro */
-    --ok-light:     #B9C966;        /* verde claro */
-
-    --warn:         #BA944B;        /* âmbar */
-    --warn-light:   #CEC4B0;
-
-    --danger:       #F06A22;        /* laranja crítico */
-    --danger-deep:  #504937;
-
-    --teal:         #379A8D;        /* teal — saúde/info */
-    --teal-light:   #98C0B8;
-
-    --grey:         #5C6670;        /* LDC Grey */
-    --purple:       #5E699E;        /* eixo secundário */
-
-    /* ── Texto ── */
-    --text-hi:      #EEF4F9;
-    --text-mid:     #98C0B8;
-    --text-lo:      #4a5a6a;
-
-    /* ── Tipografia ── */
+    --warn:         #f0a500;
+    --danger:       #ff4757;
+    --ok:           #2ed573;
+    --text-hi:      #e6edf3;
+    --text-mid:     #8b949e;
+    --text-lo:      #484f58;
     --font-head:    'Rajdhani', sans-serif;
     --font-mono:    'Share Tech Mono', monospace;
     --font-body:    'Exo 2', sans-serif;
 }
 
-/* ── Base ──────────────────────────────────── */
+/* Base */
 html, body, [class*="css"] {
     font-family: var(--font-body) !important;
     background-color: var(--bg-base) !important;
     color: var(--text-hi) !important;
 }
 
+/* Hide default header/footer */
 #MainMenu, footer, header { visibility: hidden; }
 
-/* ── Sidebar ─────────────────────────────── */
+/* Sidebar */
 section[data-testid="stSidebar"] {
     background: var(--bg-card) !important;
     border-right: 1px solid var(--border) !important;
@@ -101,11 +68,11 @@ section[data-testid="stSidebar"] * {
     font-family: var(--font-body) !important;
 }
 
-/* ── Header banner ────────────────────────── */
+/* Custom header band */
 .top-banner {
-    background: linear-gradient(135deg, #0e1820 0%, #1c2b3a 50%, #0e1820 100%);
-    border-bottom: 2px solid var(--accent-solid);
-    box-shadow: 0 4px 24px rgba(50,85,110,0.35);
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d1117 100%);
+    border-bottom: 1px solid var(--accent);
+    box-shadow: 0 0 30px rgba(50,85,110,0.12);
     padding: 18px 32px;
     margin: -1rem -1rem 2rem -1rem;
     display: flex;
@@ -114,7 +81,6 @@ section[data-testid="stSidebar"] * {
 }
 .top-banner .logo-box {
     width: 48px; height: 48px;
-    background: var(--accent-solid);
     border: 2px solid var(--accent);
     border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
@@ -139,14 +105,13 @@ section[data-testid="stSidebar"] * {
     margin-top: 2px;
 }
 
-/* ── Metric cards ─────────────────────────── */
+/* Metric cards */
 .metric-row { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-
 .metric-card {
     flex: 1; min-width: 150px;
     background: var(--bg-panel);
     border: 1px solid var(--border);
-    border-top: 3px solid var(--accent-solid);
+    border-top: 2px solid var(--accent);
     border-radius: 8px;
     padding: 16px 20px;
     position: relative;
@@ -156,7 +121,7 @@ section[data-testid="stSidebar"] * {
     content: '';
     position: absolute; top: 0; left: 0; right: 0; height: 1px;
     background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    opacity: 0.4;
+    opacity: 0.5;
 }
 .metric-card .label {
     font-family: var(--font-mono);
@@ -179,21 +144,14 @@ section[data-testid="stSidebar"] * {
     color: var(--text-mid);
     margin-top: 4px;
 }
-
-/* Card — estados semânticos */
-.metric-card.ok     { border-top-color: var(--ok); }
-.metric-card.ok     .value { color: var(--ok); }
-
-.metric-card.warn   { border-top-color: var(--warn); }
-.metric-card.warn   .value { color: var(--warn); }
-
+.metric-card.warn  { border-top-color: var(--warn);   }
+.metric-card.warn  .value { color: var(--warn); }
 .metric-card.danger { border-top-color: var(--danger); }
 .metric-card.danger .value { color: var(--danger); }
+.metric-card.ok    { border-top-color: var(--ok); }
+.metric-card.ok    .value  { color: var(--ok); }
 
-.metric-card.teal   { border-top-color: var(--teal); }
-.metric-card.teal   .value { color: var(--teal); }
-
-/* ── Badges ───────────────────────────────── */
+/* Status badges */
 .badge {
     display: inline-block;
     padding: 3px 10px;
@@ -204,25 +162,25 @@ section[data-testid="stSidebar"] * {
     text-transform: uppercase;
     font-weight: 600;
 }
-.badge-ok      { background: rgba(78,157,45,0.15);   color: var(--ok);      border: 1px solid rgba(78,157,45,0.35); }
-.badge-warn    { background: rgba(186,148,75,0.15);  color: var(--warn);    border: 1px solid rgba(186,148,75,0.35); }
-.badge-danger  { background: rgba(240,106,34,0.15);  color: var(--danger);  border: 1px solid rgba(240,106,34,0.35); }
-.badge-offline { background: rgba(92,102,112,0.15);  color: var(--grey);    border: 1px solid rgba(92,102,112,0.3); }
+.badge-ok      { background: rgba(46,213,115,0.15); color: var(--ok);     border: 1px solid rgba(46,213,115,0.3); }
+.badge-warn    { background: rgba(240,165,0,0.15);  color: var(--warn);   border: 1px solid rgba(240,165,0,0.3); }
+.badge-danger  { background: rgba(240,106,34,0.15);  color: var(--danger); border: 1px solid rgba(255,71,87,0.3); }
+.badge-offline { background: rgba(139,148,158,0.1); color: var(--text-mid); border: 1px solid var(--border); }
 
-/* ── Section titles ───────────────────────── */
+/* Section headers */
 .section-title {
     font-family: var(--font-head);
     font-size: 1rem;
     font-weight: 600;
     letter-spacing: 3px;
     text-transform: uppercase;
-    color: var(--teal-light);
-    border-left: 3px solid var(--accent-solid);
+    color: var(--text-mid);
+    border-left: 3px solid var(--accent);
     padding-left: 10px;
     margin: 24px 0 14px 0;
 }
 
-/* ── Tabelas ──────────────────────────────── */
+/* Asset/Point table */
 .data-table {
     width: 100%;
     border-collapse: collapse;
@@ -246,19 +204,18 @@ section[data-testid="stSidebar"] * {
     color: var(--text-hi);
     vertical-align: middle;
 }
-.data-table tr:hover td { background: rgba(50,85,110,0.12); }
-
+.data-table tr:hover td { background: rgba(50,85,110,0.08); }
 .id-chip {
     font-family: var(--font-mono);
     font-size: 0.78rem;
     color: var(--accent);
-    background: rgba(50,85,110,0.2);
+    background: rgba(50,85,110,0.12);
     padding: 2px 8px;
     border-radius: 4px;
-    border: 1px solid rgba(167,197,226,0.25);
+    border: 1px solid rgba(0,217,255,0.2);
 }
 
-/* ── Inputs / Selects ─────────────────────── */
+/* Inputs / Selects */
 .stSelectbox > div > div,
 .stTextInput > div > div > input,
 .stNumberInput > div > div > input {
@@ -270,14 +227,14 @@ section[data-testid="stSidebar"] * {
 }
 .stSelectbox > div > div:focus-within,
 .stTextInput > div > div > input:focus {
-    border-color: var(--accent-deep) !important;
+    border-color: var(--accent) !important;
     box-shadow: 0 0 0 2px var(--accent-glow) !important;
 }
 
-/* ── Botões ───────────────────────────────── */
+/* Buttons */
 .stButton > button {
     background: transparent !important;
-    border: 1px solid var(--accent-solid) !important;
+    border: 1px solid var(--accent) !important;
     color: var(--accent) !important;
     font-family: var(--font-head) !important;
     font-size: 0.9rem !important;
@@ -290,20 +247,14 @@ section[data-testid="stSidebar"] * {
 }
 .stButton > button:hover {
     background: var(--accent-glow) !important;
-    border-color: var(--accent-deep) !important;
     box-shadow: 0 0 16px var(--accent-glow) !important;
 }
 .stButton > button[kind="primary"] {
-    background: var(--accent-solid) !important;
-    border-color: var(--accent-solid) !important;
-    color: #EEF4F9 !important;
-}
-.stButton > button[kind="primary"]:hover {
-    background: var(--accent-deep) !important;
-    border-color: var(--accent-deep) !important;
+    background: var(--accent) !important;
+    color: #090c10 !important;
 }
 
-/* ── Expander ─────────────────────────────── */
+/* Expander */
 .streamlit-expanderHeader {
     background: var(--bg-panel) !important;
     border: 1px solid var(--border) !important;
@@ -312,7 +263,7 @@ section[data-testid="stSidebar"] * {
     color: var(--text-hi) !important;
 }
 
-/* ── Sidebar labels ───────────────────────── */
+/* Sidebar labels */
 .sidebar-label {
     font-family: var(--font-mono);
     font-size: 0.68rem;
@@ -322,14 +273,14 @@ section[data-testid="stSidebar"] * {
     margin-bottom: 4px;
 }
 
-/* ── Divider ──────────────────────────────── */
+/* Divider */
 .hline {
     border: none;
     border-top: 1px solid var(--border);
     margin: 20px 0;
 }
 
-/* ── Alert boxes ──────────────────────────── */
+/* Alert boxes */
 .alert-box {
     padding: 12px 16px;
     border-radius: 6px;
@@ -337,10 +288,10 @@ section[data-testid="stSidebar"] * {
     font-size: 0.88rem;
     margin: 12px 0;
 }
-.alert-warn   { background: rgba(186,148,75,0.1);   border-left: 3px solid var(--warn);    color: #CEC4B0; }
-.alert-danger { background: rgba(240,106,34,0.12);  border-left: 3px solid var(--danger);  color: #F06A22; }
-.alert-info   { background: rgba(55,154,141,0.1);   border-left: 3px solid var(--teal);    color: var(--teal-light); }
-.alert-ok     { background: rgba(78,157,45,0.1);    border-left: 3px solid var(--ok);      color: var(--ok-light); }
+.alert-warn   { background: rgba(186,148,75,0.1);  border-left: 3px solid var(--warn);   color: #f5c842; }
+.alert-danger { background: rgba(240,106,34,0.12);  border-left: 3px solid var(--danger); color: #ff6b7a; }
+.alert-info   { background: rgba(50,85,110,0.12); border-left: 3px solid var(--accent); color: var(--accent); }
+.alert-ok     { background: rgba(46,213,115,0.08); border-left: 3px solid var(--ok);    color: var(--ok); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -360,9 +311,10 @@ for key, default in {
     "imx_log":        [],
     "fleet_data":     None,
     "fleet_log":      [],
+    "base_url":       "http://services.repcenter.skf.com",
+    "selected_unit":  None,
     "username":       "patrick.coelho",
     "_password":      "",
-    "selected_unit":  None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -809,8 +761,7 @@ def get_trend_first_reading(base_url: str, token: str, point_id) -> dict | None:
 
 def get_imx_sensors(base_url: str, token: str) -> dict:
     """
-    GET /v1/nextgensensor — retorna dict {IDNode: {...}} apenas para sensores
-    comissionados (Commissioned == 1), ou seja, instalados e ativos em campo.
+    GET /v1/nextgensensor — retorna dict {IDNode: {SensorIdentifier, BatteryLevel, ...}}.
     """
     resp = requests.get(
         f"{base_url}/v1/nextgensensor",
@@ -824,7 +775,6 @@ def get_imx_sensors(base_url: str, token: str) -> dict:
     sensors = data if isinstance(data, list) else data.get("value", data.get("items", []))
     index = {}
     for s in (sensors if isinstance(sensors, list) else []):
-        # Ignora sensores não comissionados (Commissioned = 0 ou ausente)
         commissioned = s.get("Commissioned") if s.get("Commissioned") is not None \
                        else s.get("commissioned")
         if not commissioned:
@@ -873,7 +823,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
     token = _ensure_token(base_url, username, password)
     try:
         sensor_index = get_imx_sensors(base_url, token)
-        log(f"📡 {len(sensor_index)} sensor(es) IMx comissionados indexados.")
+        log(f"📡 {len(sensor_index)} sensor(es) IMx indexados.")
     except Exception as e:
         sensor_index = {}
         log(f"⚠ /v1/nextgensensor indisponível: {e}")
@@ -932,8 +882,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
         # ── Itera cada sensor (IDNode) individualmente ───────────────
         for id_node, node_points in nodes.items():
 
-            # Pula sensores não comissionados — se o IDNode não consta no
-            # sensor_index, foi filtrado por Commissioned == 0
+            # Pula sensores não comissionados
             if id_node not in sensor_index:
                 log(f"    ⊘ IDNode {id_node} — não comissionado, ignorado.")
                 continue
@@ -1196,8 +1145,6 @@ def run_fleet_scan(base_url: str, username: str, password: str,
         )
         ns_data = resp.json() if resp.status_code not in (204, 404) else []
         ns_list_raw = ns_data if isinstance(ns_data, list) else ns_data.get("value", ns_data.get("items", []))
-
-        # Filtra apenas sensores comissionados (Commissioned == 1)
         ns_list = [
             s for s in ns_list_raw
             if (s.get("Commissioned") if s.get("Commissioned") is not None
@@ -1229,11 +1176,6 @@ def run_fleet_scan(base_url: str, username: str, password: str,
             except (ValueError, TypeError):
                 conn_state_code = None
 
-            # OPC UA ConnectionState codes (nextgensensor):
-            #   0 → Desconectado / Não Comissionado  (crítico)
-            #   1 → Conectado                        (normal)
-            #   2 → Sem Medição                      (aviso)
-            #   3 → Conectado — Sem Medição           (aviso)
             CONN_STATE_LABELS = {
                 0: "Desconectado",
                 1: "Conectado",
@@ -1242,7 +1184,6 @@ def run_fleet_scan(base_url: str, username: str, password: str,
             }
             conn_state = CONN_STATE_LABELS.get(conn_state_code, f"Desconhecido ({conn_state_raw})")
 
-            # Nível de alerta
             if conn_state_code == 0 or (dias_offline and dias_offline > 2):
                 alert_level = "danger"
             elif bat is not None and bat < 20:
@@ -1388,7 +1329,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
     token = _ensure_token(base_url, username, password)
     try:
         sensor_index = get_imx_sensors(base_url, token)
-        log(f"📡 {len(sensor_index)} sensor(es) IMx comissionados indexados.")
+        log(f"📡 {len(sensor_index)} sensor(es) IMx indexados.")
     except Exception as e:
         sensor_index = {}
         log(f"⚠ /v1/nextgensensor indisponível: {e}")
@@ -1447,8 +1388,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
         # ── Itera cada sensor (IDNode) individualmente ───────────────
         for id_node, node_points in nodes.items():
 
-            # Pula sensores não comissionados — se o IDNode não consta no
-            # sensor_index, foi filtrado por Commissioned == 0
+            # Pula sensores não comissionados
             if id_node not in sensor_index:
                 log(f"    ⊘ IDNode {id_node} — não comissionado, ignorado.")
                 continue
@@ -1579,22 +1519,19 @@ def run_imx_scan(base_url: str, username: str, password: str,
 # ─────────────────────────────────────────────
 # SIDEBAR — Conexão
 # ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
-# MESH GRAPH — HELPERS E CONSTRUÇÃO
 with st.sidebar:
     st.markdown("""
     <div style="padding:16px 0 8px;">
         <div style="font-family:'Rajdhani',sans-serif;font-size:1.4rem;font-weight:700;
-                    letter-spacing:3px;text-transform:uppercase;color:#EEF4F9;">
+                    letter-spacing:3px;text-transform:uppercase;color:#e6edf3;">
             ⚙ SKF Observer
         </div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:0.68rem;
-                    color:#A7C5E2;letter-spacing:2px;">PHOENIX API v2.0</div>
+                    color:#00d9ff;letter-spacing:2px;">PHOENIX API v2.0</div>
     </div>
-    <hr style="border-color:#2a3f52;margin:8px 0 16px 0;">
+    <hr style="border-color:#21262d;margin:8px 0 20px 0;">
     """, unsafe_allow_html=True)
-
-    # ── Seletor de Unidade ───────────────────────
+ 
     UNITS = {
         "Alto Araguaia":      ("21221", "http://services.repcenter.skf.com:21221"),
         "Itumbiara":          ("21236", "http://services.repcenter.skf.com:21236"),
@@ -1606,30 +1543,10 @@ with st.sidebar:
     st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
 
     for unit_name, (port, unit_url) in UNITS.items():
-        is_active = st.session_state.selected_unit == unit_name
-        # Botão com estilo diferenciado quando selecionado
-        btn_style = (
-            "background:var(--accent-solid) !important;"
-            "color:#EEF4F9 !important;"
-            "border-color:var(--accent-solid) !important;"
-        ) if is_active else ""
-        # Injetar estilo via chave única
-        btn_key = f"unit_{port}"
-        if is_active:
-            st.markdown(
-                f'<style>div[data-testid="stButton"] '
-                f'button[kind="secondary"]#{btn_key}'
-                f'{{background:var(--accent-solid)!important;'
-                f'color:#EEF4F9!important;}}</style>',
-                unsafe_allow_html=True,
-            )
-        if st.button(
-            f"{'▶ ' if is_active else '   '}{unit_name}  ·  :{port}",
-            key=btn_key,
-            use_container_width=True,
-        ):
-            if st.session_state.selected_unit != unit_name:
-                # Troca de unidade: limpa todo o estado de dados
+        is_active = st.session_state.get("selected_unit") == unit_name
+        btn_label = f"{'▶ ' if is_active else '   '}{unit_name}  ·  :{port}"
+        if st.button(btn_label, key=f"unit_{port}", use_container_width=True):
+            if st.session_state.get("selected_unit") != unit_name:
                 st.session_state.selected_unit  = unit_name
                 st.session_state.base_url       = unit_url
                 st.session_state.token          = None
@@ -1646,7 +1563,6 @@ with st.sidebar:
                 st.session_state.fleet_log      = []
                 st.rerun()
 
-    # URL ativa — exibe apenas, sem campo editável por padrão
     _active_url = st.session_state.get("base_url", "—")
     st.markdown(
         f'<div style="font-family:Share Tech Mono,monospace;font-size:0.68rem;'
@@ -1655,40 +1571,26 @@ with st.sidebar:
         f'{_active_url}</div>',
         unsafe_allow_html=True,
     )
-
-
-    # ── Credenciais ──────────────────────────────
-    st.markdown('<div class="sidebar-label">Usuário</div>', unsafe_allow_html=True)
-    username = st.text_input("", value=st.session_state.username, label_visibility="collapsed",
-                              key="sidebar_username")
-
+ 
+    st.markdown('<div class="sidebar-label" style="margin-top:12px;">Usuário</div>', unsafe_allow_html=True)
+    username = st.text_input("", value=st.session_state.username, label_visibility="collapsed")
+ 
     st.markdown('<div class="sidebar-label" style="margin-top:12px;">Senha</div>', unsafe_allow_html=True)
-    password = st.text_input("", type="password", placeholder="••••••••", label_visibility="collapsed",
-                              key="sidebar_password")
-
-    # Mostra qual unidade está selecionada
-    if st.session_state.selected_unit:
-        st.markdown(
-            f'<div style="font-family:Share Tech Mono,monospace;font-size:0.7rem;'
-            f'color:#98C0B8;margin:8px 0 4px;letter-spacing:1px;">'
-            f'📍 {st.session_state.selected_unit}</div>',
-            unsafe_allow_html=True,
-        )
-
-    if st.button("🔌  Conectar", use_container_width=True, key="btn_connect"):
+    password = st.text_input("", type="password", placeholder="••••••••", label_visibility="collapsed")
+ 
+    if st.button("🔌  Conectar", use_container_width=True):
         with st.spinner("Autenticando..."):
             try:
-                base_url = st.session_state.base_url
                 token = autenticar(base_url, username, password)
                 import time as _time
-                st.session_state.token     = token
-                st.session_state.token_ts  = _time.time()
-                st.session_state.username  = username
+                st.session_state.token    = token
+                st.session_state.token_ts = _time.time()
+                st.session_state.username = username
                 st.session_state._password = password
                 assets = get_assets(base_url, token)
-                st.session_state.assets         = assets
-                st.session_state.points         = []
-                st.session_state.trend_df       = None
+                st.session_state.assets   = assets
+                st.session_state.points   = []
+                st.session_state.trend_df = None
                 st.session_state.selected_asset = None
                 st.session_state.selected_point = None
                 st.success(f"✅ Conectado! {len(assets)} asset(s) encontrado(s).")
@@ -1698,6 +1600,1142 @@ with st.sidebar:
                 st.error(f"❌ Erro HTTP {e.response.status_code}")
             except Exception as e:
                 st.error(f"❌ {e}")
+ 
+    # Status de conexão
+    st.markdown('<hr style="border-color:#21262d;margin:20px 0;">', unsafe_allow_html=True)
+    if st.session_state.token:
+        st.markdown("""
+        <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:8px;height:8px;background:#2ed573;border-radius:50%;
+                        box-shadow:0 0 8px #2ed573;"></div>
+            <span style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;
+                         color:#8b949e;letter-spacing:1px;">CONECTADO</span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:8px;height:8px;background:#484f58;border-radius:50%;"></div>
+            <span style="font-family:'Share Tech Mono',monospace;font-size:0.72rem;
+                         color:#484f58;letter-spacing:1px;">DESCONECTADO</span>
+        </div>""", unsafe_allow_html=True)
+ 
+    # Filtros de data (visível só quando conectado)
+    if st.session_state.token:
+        st.markdown('<hr style="border-color:#21262d;margin:20px 0;">', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-label">Período de tendência</div>', unsafe_allow_html=True)
+ 
+        today = datetime.now(timezone.utc).date()
+        date_from = st.date_input("De", value=today - timedelta(days=90), label_visibility="visible")
+        date_to   = st.date_input("Até", value=today, label_visibility="visible")
+        max_read  = st.number_input("Máx. leituras", min_value=10, max_value=5000,
+                                    value=500, step=50)
+        st.session_state["date_from"] = date_from
+        st.session_state["date_to"]   = date_to
+        st.session_state["max_read"]  = max_read
+ 
+ 
+# ─────────────────────────────────────────────
+# MAIN CONTENT
+# ─────────────────────────────────────────────
+ 
+# Header banner
+st.markdown("""
+<div class="top-banner">
+    <div class="logo-box">⚙</div>
+    <div>
+        <h1>SKF Observer Phoenix</h1>
+        <div class="sub">Sistema de Monitoramento de Pontos Rotativos</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+ 
+# ── Sem conexão ──────────────────────────────
+if not st.session_state.token:
+    st.markdown("""
+    <div class="alert-info">
+        ⟶  Configure as credenciais na barra lateral e clique em <strong>Conectar</strong> para iniciar.
+    </div>
+    """, unsafe_allow_html=True)
+ 
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="label">Passo 1</div>
+            <div style="font-family:'Rajdhani',sans-serif;font-size:1.1rem;font-weight:600;color:#e6edf3;margin-top:6px;">
+                🔌 Conectar API
+            </div>
+            <div style="font-size:0.82rem;color:#8b949e;margin-top:8px;">
+                Informe a URL do servidor Observer Phoenix e suas credenciais.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="label">Passo 2</div>
+            <div style="font-family:'Rajdhani',sans-serif;font-size:1.1rem;font-weight:600;color:#e6edf3;margin-top:6px;">
+                🏭 Selecionar Asset
+            </div>
+            <div style="font-size:0.82rem;color:#8b949e;margin-top:8px;">
+                Escolha a máquina (equipamento) que deseja monitorar.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown("""
+        <div class="metric-card">
+            <div class="label">Passo 3</div>
+            <div style="font-family:'Rajdhani',sans-serif;font-size:1.1rem;font-weight:600;color:#e6edf3;margin-top:6px;">
+                📈 Visualizar Tendência
+            </div>
+            <div style="font-size:0.82rem;color:#8b949e;margin-top:8px;">
+                Selecione um ponto de medição e explore o gráfico interativo.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    st.stop()
+ 
+ 
+# ─────────────────────────────────────────────
+# TABS
+# ─────────────────────────────────────────────
+tab_monitor, tab_imx, tab_fleet = st.tabs([
+    "📈  Monitor de Pontos",
+    "🔬  IMx-1 Comissionamento",
+    "🛰  Fleet Monitoring",
+])
+ 
+# ══════════════════════════════════════════════
+# TAB 1 — MONITOR DE PONTOS
+# ══════════════════════════════════════════════
+with tab_monitor:
+ 
+    # ─────────────────────────────────────────
+    # ASSETS
+    # ─────────────────────────────────────────
+    assets = st.session_state.assets
+    st.markdown('<div class="section-title">Assets — Máquinas Cadastradas</div>', unsafe_allow_html=True)
+ 
+    # Tabela de assets
+    rows_html = ""
+    for a in assets:
+        badge = status_badge(a.get("Status", []))
+        rows_html += f"""
+        <tr>
+            <td><span class="id-chip">{a['ID']}</span></td>
+            <td><strong>{a['Name']}</strong></td>
+            <td style="font-size:0.82rem;color:#8b949e;">{a.get('Description','—')}</td>
+            <td style="font-size:0.78rem;font-family:'Share Tech Mono',monospace;color:#484f58;">{a.get('Path','—')}</td>
+            <td>{badge}</td>
+        </tr>"""
+ 
+    st.markdown(f"""
+    <table class="data-table">
+        <thead><tr>
+            <th>ID</th><th>Nome</th><th>Descrição</th><th>Path</th><th>Status</th>
+        </tr></thead>
+        <tbody>{rows_html}</tbody>
+    </table>
+    """, unsafe_allow_html=True)
+ 
+    # Seleção de asset
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_sel, col_btn = st.columns([3, 1])
+    with col_sel:
+        asset_options = {f"[{a['ID']}]  {a['Name']}": a for a in assets}
+        chosen_asset_label = st.selectbox(
+            "Selecionar Asset",
+            options=list(asset_options.keys()),
+            index=0,
+            label_visibility="visible",
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_points = st.button("⟶  Carregar Points", use_container_width=True)
+ 
+    if load_points:
+        selected_asset = asset_options[chosen_asset_label]
+        st.session_state.selected_asset = selected_asset
+        st.session_state.trend_df       = None
+        st.session_state.spectrum_data  = None
+        st.session_state.selected_point = None
+        with st.spinner(f"Carregando points de [{selected_asset['ID']}] {selected_asset['Name']}..."):
+            try:
+                pts = get_points(st.session_state.base_url, st.session_state.token, selected_asset["ID"])
+                st.session_state.points = pts
+            except Exception as e:
+                st.error(f"Erro ao carregar points: {e}")
+ 
+    # ─────────────────────────────────────────────
+    # POINTS
+    # ─────────────────────────────────────────────
+    if st.session_state.points:
+        points = st.session_state.points
+        asset  = st.session_state.selected_asset
+ 
+        st.markdown(f'<div class="section-title">Points — {asset["Name"]}</div>', unsafe_allow_html=True)
+ 
+        # Cards de resumo
+        st.markdown(f"""
+        <div class="metric-row">
+            <div class="metric-card">
+                <div class="label">Total de Points</div>
+                <div class="value">{len(points)}</div>
+                <div class="unit">pontos de medição</div>
+            </div>
+            <div class="metric-card ok">
+                <div class="label">Asset ID</div>
+                <div class="value">{asset['ID']}</div>
+                <div class="unit">{asset['Name']}</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Status</div>
+                <div class="value" style="font-size:1.2rem;margin-top:4px;">
+                    {"✅ OK" if not asset.get("Status") or asset["Status"][0]==0 else "⚠ Alerta"}
+                </div>
+                <div class="unit">{asset.get('Path','')}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+ 
+        # Tabela de points
+        rows_html = ""
+        for p in points:
+            unit  = p.get("unit",  p.get("Unit",  "—"))
+            ptype = p.get("type",  p.get("Type",  "—"))
+            pname = p.get("name",  p.get("Name",  "—"))
+            pid   = p.get("id",    p.get("ID",    "—"))
+            rows_html += f"""
+            <tr>
+                <td><span class="id-chip">{pid}</span></td>
+                <td><strong>{pname}</strong></td>
+                <td style="font-size:0.82rem;color:#8b949e;">{ptype}</td>
+                <td style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:#00d9ff;">{unit}</td>
+            </tr>"""
+ 
+        st.markdown(f"""
+        <table class="data-table">
+            <thead><tr><th>ID</th><th>Nome do Point</th><th>Tipo</th><th>Unidade</th></tr></thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+        """, unsafe_allow_html=True)
+ 
+        # Seleção de point
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_pt, col_btn2, col_btn3 = st.columns([3, 1, 1])
+        point_opts = {f"[{p.get('id',p.get('ID'))}]  {p.get('name',p.get('Name','?'))}": p for p in points}
+ 
+        with col_pt:
+            chosen_point_label = st.selectbox(
+                "Selecionar Point",
+                options=list(point_opts.keys()),
+                label_visibility="visible",
+            )
+        with col_btn2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            load_trend = st.button("📈  Carregar Tendência", use_container_width=True)
+        with col_btn3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            load_spectrum = st.button("〜  Carregar Espectro", use_container_width=True)
+ 
+        if load_trend:
+            pt = point_opts[chosen_point_label]
+            st.session_state.selected_point = pt
+            st.session_state.spectrum_data  = None
+            pid = pt.get("id", pt.get("ID"))
+ 
+            from_dt = st.session_state.get("date_from")
+            to_dt   = st.session_state.get("date_to")
+            max_r   = st.session_state.get("max_read", 500)
+            from_str = f"{from_dt}T00:00:00Z" if from_dt else None
+            to_str   = f"{to_dt}T23:59:59Z"   if to_dt   else None
+ 
+            with st.spinner(f"Buscando dados de tendência para point [{pid}]..."):
+                try:
+                    raw = get_trend(st.session_state.base_url, st.session_state.token,
+                                    pid, from_str, to_str, max_r)
+                    df  = parse_trend(raw)
+                    st.session_state.trend_df = df
+                except Exception as e:
+                    st.error(f"Erro ao buscar trend: {e}")
+ 
+        if load_spectrum:
+            pt = point_opts[chosen_point_label]
+            st.session_state.selected_point = pt
+            pid = pt.get("id", pt.get("ID"))
+ 
+            with st.spinner(f"Buscando espectro de vibração para point [{pid}]..."):
+                try:
+                    raw_spec = get_spectrum(st.session_state.base_url, st.session_state.token, pid)
+                    channels_spec = parse_spectrum(raw_spec)
+                    st.session_state.spectrum_data = channels_spec
+                    if not channels_spec:
+                        st.warning("⚠ Nenhum dado de espectro disponível para este ponto.")
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 404:
+                        st.warning("⚠ Este ponto não possui medições dinâmicas (espectro) disponíveis.")
+                    else:
+                        st.error(f"Erro HTTP ao buscar espectro: {e}")
+                except Exception as e:
+                    st.error(f"Erro ao buscar espectro: {e}")
+ 
+ 
+    # ─────────────────────────────────────────────
+    # TREND PLOT
+    # ─────────────────────────────────────────────
+    if st.session_state.trend_df is not None:
+        df_all = st.session_state.trend_df
+        point  = st.session_state.selected_point
+        asset  = st.session_state.selected_asset
+ 
+        pname = point.get("name", point.get("Name", "—"))
+        pid   = point.get("id",   point.get("ID",   "—"))
+ 
+        st.markdown(f'<div class="section-title">Tendência — {pname}</div>', unsafe_allow_html=True)
+ 
+        if df_all.empty:
+            st.markdown("""
+            <div class="alert-warn">⚠ Nenhuma leitura encontrada para o período selecionado.</div>
+            """, unsafe_allow_html=True)
+        else:
+            # ── Seletor de canal (quando há múltiplos channels) ─────────
+            channel_opts = get_channel_options(df_all)
+ 
+            if len(channel_opts) > 1:
+                chosen_ch_label = st.selectbox(
+                    "Canal de medição",
+                    options=list(channel_opts.keys()),
+                    label_visibility="visible",
+                )
+                selected_ch = channel_opts[chosen_ch_label]
+            else:
+                selected_ch = list(channel_opts.values())[0] if channel_opts else 1
+ 
+            # Filtra pelo canal selecionado
+            df = df_all[df_all["channel"] == selected_ch].copy()
+ 
+            unit         = df["unit"].iloc[-1]         if not df.empty else ""
+            channel_name = df["channel_name"].iloc[-1]  if not df.empty else "Overall"
+            direction    = df["direction"].iloc[-1]      if not df.empty else ""
+ 
+            # ── Estatísticas ─────────────────────────
+            media   = df["value"].mean()
+            desvio  = df["value"].std()
+            vmin    = df["value"].min()
+            vmax    = df["value"].max()
+            vlast   = df["value"].iloc[-1]
+            l_alert = media + 2 * desvio
+            l_alarm = media + 3 * desvio
+ 
+            in_alarm   = vlast >= l_alarm
+            in_alert   = vlast >= l_alert and not in_alarm
+            card_class = "danger" if in_alarm else ("warn" if in_alert else "ok")
+ 
+            # Velocidade e processo (se disponíveis)
+            has_speed = "speed" in df.columns and df["speed"].notna().any()
+            speed_last = df["speed"].iloc[-1] if has_speed else None
+ 
+            st.markdown(f"""
+            <div class="metric-row">
+                <div class="metric-card {card_class}">
+                    <div class="label">Última Leitura</div>
+                    <div class="value">{vlast:.4f}</div>
+                    <div class="unit">{unit}  ·  {df['timestamp'].iloc[-1].strftime('%d/%m/%Y %H:%M')}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Média</div>
+                    <div class="value">{media:.4f}</div>
+                    <div class="unit">{unit}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Desvio Padrão</div>
+                    <div class="value">{desvio:.4f}</div>
+                    <div class="unit">σ</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Mínimo / Máximo</div>
+                    <div class="value">{vmin:.3f}</div>
+                    <div class="unit">min  ·  máx  {vmax:.3f} {unit}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Leituras</div>
+                    <div class="value">{len(df)}</div>
+                    <div class="unit">pontos no período</div>
+                </div>
+                {"" if not has_speed else f'''
+                <div class="metric-card">
+                    <div class="label">Velocidade (última)</div>
+                    <div class="value">{speed_last:.1f}</div>
+                    <div class="unit">RPM</div>
+                </div>'''}
+            </div>
+            """, unsafe_allow_html=True)
+ 
+            if in_alarm:
+                st.markdown(f'<div class="alert-danger">🚨 ALARME — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+3σ ({l_alarm:.4f})</div>',
+                            unsafe_allow_html=True)
+            elif in_alert:
+                st.markdown(f'<div class="alert-warn">⚠ ALERTA — Leitura atual ({vlast:.4f} {unit}) ultrapassa μ+2σ ({l_alert:.4f})</div>',
+                            unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="alert-ok">✔ NORMAL — Leitura dentro dos limites esperados.</div>',
+                            unsafe_allow_html=True)
+ 
+            # ── Plotly Chart ──────────────────────────
+            ch_title = f"{channel_name}"
+            if direction:
+                ch_title += f" [{direction}]"
+ 
+            fig = go.Figure()
+ 
+            # Área sombreada
+            fig.add_trace(go.Scatter(
+                x=df["timestamp"], y=df["value"],
+                fill="tozeroy",
+                fillcolor="rgba(50,85,110,0.08)",
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False, hoverinfo="skip",
+            ))
+ 
+            # Banda ±1σ
+            fig.add_trace(go.Scatter(
+                x=pd.concat([df["timestamp"], df["timestamp"][::-1]]),
+                y=pd.concat([
+                    pd.Series([media + desvio] * len(df)),
+                    pd.Series([media - desvio] * len(df))[::-1],
+                ]),
+                fill="toself",
+                fillcolor="rgba(78,157,45,0.07)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="±1σ (normal)",
+                hoverinfo="skip",
+            ))
+ 
+            # Linha principal de leitura
+            fig.add_trace(go.Scatter(
+                x=df["timestamp"], y=df["value"],
+                mode="lines+markers",
+                name=f"{ch_title}",
+                line=dict(color="#A7C5E2", width=2),
+                marker=dict(size=5, color="#A7C5E2", opacity=0.8),
+                hovertemplate=(
+                    "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>"
+                    f"<b>{ch_title}:</b> %{{y:.4f}} {unit}<extra></extra>"
+                ),
+            ))
+ 
+            # Linha de velocidade (eixo secundário, se disponível)
+            if has_speed and df["speed"].notna().any():
+                fig.add_trace(go.Scatter(
+                    x=df["timestamp"], y=df["speed"],
+                    mode="lines",
+                    name="Velocidade (RPM)",
+                    line=dict(color="#5E699E", width=1, dash="dot"),
+                    yaxis="y2",
+                    hovertemplate="<b>Velocidade:</b> %{y:.1f} RPM<extra></extra>",
+                    opacity=0.7,
+                ))
+ 
+            # Linhas de referência
+            fig.add_hline(y=media, line=dict(color="#4E9D2D", width=1.5, dash="dash"),
+                          annotation_text=f"Média  {media:.4f}", annotation_font_color="#4E9D2D",
+                          annotation_position="top right")
+            fig.add_hline(y=l_alert, line=dict(color="#BA944B", width=1.2, dash="dot"),
+                          annotation_text=f"Alerta  {l_alert:.4f}", annotation_font_color="#BA944B",
+                          annotation_position="top right")
+            fig.add_hline(y=l_alarm, line=dict(color="#F06A22", width=1.2, dash="dot"),
+                          annotation_text=f"Alarme  {l_alarm:.4f}", annotation_font_color="#F06A22",
+                          annotation_position="top right")
+ 
+            layout_extra = {}
+            if has_speed:
+                layout_extra["yaxis2"] = dict(
+                    title=dict(text="Velocidade [RPM]", font=dict(color="#5E699E", size=10)),
+                    overlaying="y", side="right",
+                    gridcolor="rgba(0,0,0,0)",
+                    tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#5E699E"),
+                )
+ 
+            fig.update_layout(
+                paper_bgcolor="#0e1820",
+                plot_bgcolor="#162130",
+                font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                title=dict(
+                    text=f"<b>{pname}</b>  ·  {asset['Name']}  ·  <span style='color:#00d9ff'>{ch_title}</span>",
+                    font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                    x=0.01,
+                ),
+                xaxis=dict(
+                    gridcolor="#2a3f52", zeroline=False,
+                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                    title=dict(text="Data / Hora (UTC)", font=dict(color="#98C0B8", size=11)),
+                    rangeslider=dict(visible=True, bgcolor="#162130", thickness=0.06),
+                ),
+                yaxis=dict(
+                    gridcolor="#2a3f52", zeroline=False,
+                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                    title=dict(text=f"{ch_title}  [{unit}]", font=dict(color="#98C0B8", size=11)),
+                ),
+                legend=dict(
+                    bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
+                    font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                    orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                ),
+                hovermode="x unified",
+                margin=dict(l=60, r=60, t=70, b=60),
+                height=500,
+                **layout_extra,
+            )
+ 
+            st.plotly_chart(fig, use_container_width=True)
+ 
+            # ── Tabela de dados brutos ───────────────
+            with st.expander("🗃  Ver dados brutos"):
+                df_show = df[["timestamp", "value", "unit", "channel_name",
+                              "direction", "speed", "process"]].copy()
+                df_show["timestamp"] = df_show["timestamp"].dt.strftime("%d/%m/%Y %H:%M:%S")
+                df_show.columns = [
+                    "Data/Hora (UTC)", "Level", "Unidade",
+                    "Canal", "Direção", "Velocidade (RPM)", "Processo",
+                ]
+                st.dataframe(df_show, use_container_width=True, hide_index=True, height=300)
+ 
+                csv = df_show.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇  Exportar CSV",
+                    data=csv,
+                    file_name=f"trend_{pid}_ch{selected_ch}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                )
+ 
+ 
+    # ─────────────────────────────────────────────
+    # SPECTRUM PLOT
+    # ─────────────────────────────────────────────
+    if st.session_state.spectrum_data:
+        channels_spec = st.session_state.spectrum_data
+        point  = st.session_state.selected_point
+        pname  = point.get("name", point.get("Name", "—")) if point else "—"
+        pid    = point.get("id",   point.get("ID",   "—")) if point else "—"
+ 
+        st.markdown(f'<div class="section-title">Espectro de Vibração — {pname}</div>',
+                    unsafe_allow_html=True)
+ 
+        # ── Info cards do espectro ──────────────────
+        first = channels_spec[0]
+        speed_val = first.get("speed", 0.0)
+        n_ch = len(channels_spec)
+ 
+        st.markdown(f"""
+        <div class="metric-row">
+            <div class="metric-card">
+                <div class="label">Canais</div>
+                <div class="value">{n_ch}</div>
+                <div class="unit">direções medidas</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Faixa de Frequência</div>
+                <div class="value">{first['end_freq']:.0f}</div>
+                <div class="unit">{first['start_freq']:.0f} – {first['end_freq']:.0f} Hz</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Taxa de Amostragem</div>
+                <div class="value">{first['sample_rate']:.0f}</div>
+                <div class="unit">Hz · {first['samples']} amostras</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Unidade</div>
+                <div class="value" style="font-size:1.3rem;margin-top:6px;">{first['eu']}</div>
+                <div class="unit">amplitude</div>
+            </div>
+            {"" if speed_val == 0.0 else f'''
+            <div class="metric-card">
+                <div class="label">Velocidade</div>
+                <div class="value">{speed_val:.1f}</div>
+                <div class="unit">{first["speed_units"]}</div>
+            </div>'''}
+        </div>
+        """, unsafe_allow_html=True)
+ 
+        # ── Seletor de canal (se múltiplos) ────────
+        DIRECTION_MAP = {0: "X", 1: "Y", 2: "Z", 3: "H", 4: "V", 5: "A", -1: "—"}
+        MTYPE_MAP     = {0: "Waveform", 1: "Espectro (velocidade)", 2: "Espectro", 3: "Cepstrum"}
+ 
+        ch_labels = []
+        for i, ch in enumerate(channels_spec):
+            dir_str  = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
+            mtype_str = MTYPE_MAP.get(ch["mtype"], f"Tipo {ch['mtype']}")
+            ch_labels.append(f"Canal {i+1}  [{dir_str}]  — {mtype_str}")
+ 
+        if len(ch_labels) > 1:
+            sel_ch_label = st.selectbox("Canal do espectro", options=ch_labels, key="spec_ch_sel")
+            sel_ch_idx = ch_labels.index(sel_ch_label)
+        else:
+            sel_ch_idx = 0
+ 
+        ch = channels_spec[sel_ch_idx]
+        freqs  = ch["freqs"]
+        values = ch["values"]
+        eu     = ch["eu"]
+        dir_str = DIRECTION_MAP.get(ch["direction"], str(ch["direction"]))
+ 
+        # ── Picos principais (top 10) ───────────────
+        peak_indices = np.argsort(values)[::-1][:10]
+        peak_freqs   = freqs[peak_indices]
+        peak_vals    = values[peak_indices]
+ 
+        # ── Frequência de rotação (1X, 2X, 3X) ──────
+        harmonic_lines = []
+        if speed_val and speed_val > 0:
+            rpm_hz = speed_val / 60.0
+            for h in range(1, 6):
+                hf = rpm_hz * h
+                if ch["start_freq"] <= hf <= ch["end_freq"]:
+                    harmonic_lines.append((hf, f"{h}X  {hf:.1f} Hz"))
+ 
+        # ── Plotly ──────────────────────────────────
+        fig_spec = go.Figure()
+ 
+        # Área preenchida sob o espectro
+        fig_spec.add_trace(go.Scatter(
+            x=freqs, y=values,
+            fill="tozeroy",
+            fillcolor="rgba(50,85,110,0.10)",
+            line=dict(color="rgba(0,0,0,0)"),
+            showlegend=False, hoverinfo="skip",
+        ))
+ 
+        # Linha do espectro
+        fig_spec.add_trace(go.Scatter(
+            x=freqs, y=values,
+            mode="lines",
+            name=f"Espectro [{dir_str}]",
+            line=dict(color="#A7C5E2", width=1.5),
+            hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.4f} " + eu + "<extra></extra>",
+        ))
+ 
+        # Marcadores de picos
+        fig_spec.add_trace(go.Scatter(
+            x=peak_freqs, y=peak_vals,
+            mode="markers+text",
+            name="Picos",
+            marker=dict(size=8, color="#BA944B", symbol="triangle-up",
+                        line=dict(color="#BA944B", width=1)),
+            text=[f"{f:.1f}" for f in peak_freqs],
+            textposition="top center",
+            textfont=dict(family="Share Tech Mono, monospace", size=9, color="#BA944B"),
+            hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.5f} " + eu + "<extra>Pico</extra>",
+        ))
+ 
+        # Linhas harmônicas de rotação
+        for hf, hlabel in harmonic_lines:
+            fig_spec.add_vline(
+                x=hf,
+                line=dict(color="rgba(94,105,158,0.6)", width=1, dash="dot"),
+                annotation_text=hlabel,
+                annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#5E699E"),
+                annotation_position="top",
+            )
+ 
+        fig_spec.update_layout(
+            paper_bgcolor="#0e1820",
+            plot_bgcolor="#162130",
+            font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+            title=dict(
+                text=(f"<b>{pname}</b>  ·  Espectro  ·  "
+                      f"<span style='color:#00d9ff'>Direção {dir_str}</span>  ·  "
+                      f"<span style='color:#8b949e'>{eu}</span>"),
+                font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                x=0.01,
+            ),
+            xaxis=dict(
+                gridcolor="#2a3f52", zeroline=False,
+                tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                title=dict(text="Frequência [Hz]", font=dict(color="#98C0B8", size=11)),
+                rangeslider=dict(visible=True, bgcolor="#162130", thickness=0.06),
+            ),
+            yaxis=dict(
+                gridcolor="#2a3f52", zeroline=False,
+                tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                title=dict(text=f"Amplitude  [{eu}]", font=dict(color="#98C0B8", size=11)),
+            ),
+            legend=dict(
+                bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
+                font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+            ),
+            hovermode="x",
+            margin=dict(l=60, r=40, t=70, b=60),
+            height=450,
+        )
+ 
+        st.plotly_chart(fig_spec, use_container_width=True)
+ 
+        # ── Tabela de picos ──────────────────────────
+        with st.expander("📊  Top 10 picos do espectro"):
+            df_peaks = pd.DataFrame({
+                "Frequência (Hz)": [f"{f:.3f}" for f in peak_freqs],
+                f"Amplitude ({eu})": [f"{v:.5f}" for v in peak_vals],
+                "Rank": [f"#{i+1}" for i in range(len(peak_freqs))],
+            })
+            st.dataframe(df_peaks, use_container_width=True, hide_index=True)
+ 
+            csv_spec = df_peaks.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Exportar picos CSV",
+                data=csv_spec,
+                file_name=f"spectrum_peaks_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+ 
+        # ── Exportar espectro completo ───────────────
+        with st.expander("🗃  Ver espectro completo (dados brutos)"):
+            df_full_spec = pd.DataFrame({
+                "Frequência (Hz)": np.round(freqs, 4),
+                f"Amplitude ({eu})": np.round(values, 6),
+            })
+            st.dataframe(df_full_spec, use_container_width=True, hide_index=True, height=300)
+ 
+            csv_full = df_full_spec.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Exportar espectro completo CSV",
+                data=csv_full,
+                file_name=f"spectrum_full_{pid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+ 
+ 
+# ══════════════════════════════════════════════
+# TAB 2 — IMx-1 COMISSIONAMENTO
+# ══════════════════════════════════════════════
+with tab_imx:
+
+    st.markdown('<div class="section-title">Varredura IMx-1 — Data de Comissionamento</div>',
+                unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="alert-info">
+        ℹ  Esta varredura percorre <strong>todos os assets</strong> da planta, identifica pontos
+        vinculados a sensores <strong>IMx-1</strong> (NodeTypes 11101–11104) e usa a
+        <em>primeira leitura de tendência ≥ 01/05/2024</em> como estimativa real de comissionamento.
+        A duração depende do número de ativos — um pequeno delay é aplicado entre chamadas.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Botão de varredura ────────────────────────
+    col_scan, col_clear = st.columns([2, 1])
+    with col_scan:
+        run_scan = st.button(
+            "🔍  Iniciar Varredura Completa",
+            use_container_width=True,
+            type="primary",
+        )
+    with col_clear:
+        if st.button("🗑  Limpar Resultado", use_container_width=True):
+            st.session_state.imx_df  = None
+            st.session_state.imx_log = []
+            st.rerun()
+
+    # ── Executa varredura ─────────────────────────
+    if run_scan:
+        pw = st.session_state.get("_password", "")
+        if not pw:
+            st.error("❌ Senha não disponível — reconecte na barra lateral.")
+        else:
+            st.session_state.imx_df  = None
+            st.session_state.imx_log = []
+
+            progress_bar  = st.progress(0.0, text="Iniciando varredura...")
+            log_container = st.empty()
+            log_lines     = []
+
+            def _progress(val: float, text: str = ""):
+                progress_bar.progress(min(val, 1.0), text=text or "Processando...")
+
+            def _log(msg: str):
+                log_lines.append(msg)
+                log_container.markdown(
+                    "<br>".join(f"<span style='font-family:Share Tech Mono,monospace;"
+                                f"font-size:0.75rem;color:#8b949e;'>{l}</span>"
+                                for l in log_lines[-12:]),
+                    unsafe_allow_html=True,
+                )
+
+            try:
+                df_imx = run_imx_scan(
+                    st.session_state.base_url,
+                    st.session_state.username,
+                    pw,
+                    progress_cb=_progress,
+                    log_cb=_log,
+                )
+                st.session_state.imx_df  = df_imx
+                st.session_state.imx_log = log_lines
+                progress_bar.progress(1.0, text="✅ Varredura concluída")
+                log_container.empty()
+            except Exception as e:
+                st.error(f"❌ Erro durante varredura: {e}")
+
+    # ── Resultados ────────────────────────────────
+    if st.session_state.imx_df is not None:
+        df_imx = st.session_state.imx_df
+
+        if df_imx.empty:
+            st.markdown("""
+            <div class="alert-warn">⚠ Nenhum sensor IMx-1 encontrado na planta
+            com leituras a partir de 01/05/2024.</div>
+            """, unsafe_allow_html=True)
+        else:
+            today_utc = datetime.now(timezone.utc)
+            n_total         = len(df_imx)
+            n_ok            = df_imx["ProvavelDataComissionamento"].notna().sum()
+            n_sem_bat       = df_imx["BatteryLevel"].isna().sum()
+            bat_media       = df_imx["BatteryLevel"].mean()
+            bat_min         = df_imx["BatteryLevel"].min()
+            n_created       = (df_imx.get("FonteComissionamento", pd.Series(dtype=str))
+                               .str.startswith("ClearedDate", na=False).sum())
+            n_sentinela     = n_total - n_ok  # sem data efetiva
+
+            # ── KPI cards ────────────────────────────
+            st.markdown(f"""
+            <div class="metric-row">
+                <div class="metric-card ok">
+                    <div class="label">Sensores IMx-1</div>
+                    <div class="value">{n_total}</div>
+                    <div class="unit">encontrados na planta</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Via ClearedDate</div>
+                    <div class="value">{n_created}</div>
+                    <div class="unit">data de instalação real</div>
+                </div>
+                <div class="metric-card">
+                    <div class="label">Via 1ª Leitura</div>
+                    <div class="value">{n_ok - n_created}</div>
+                    <div class="unit">ClearedDate ausente / sentinela</div>
+                </div>
+                <div class="metric-card {"warn" if bat_media and bat_media < 50 else ""}">
+                    <div class="label">Bateria Média</div>
+                    <div class="value">{f"{bat_media:.1f}" if bat_media == bat_media else "—"}</div>
+                    <div class="unit">% · mín {f"{bat_min:.1f}" if bat_min == bat_min else "—"}%</div>
+                </div>
+                <div class="metric-card {"warn" if n_sem_bat > 0 else ""}">
+                    <div class="label">Sem Info de Bateria</div>
+                    <div class="value">{n_sem_bat}</div>
+                    <div class="unit">sensores sem metadado</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # ── Gráfico 1: Linha do tempo de comissionamento ──────────
+            df_plot = df_imx.dropna(subset=["ProvavelDataComissionamento"]).copy()
+            df_plot["_dt"] = pd.to_datetime(df_plot["ProvavelDataComissionamento"], utc=True, errors="coerce")
+            df_plot = df_plot.dropna(subset=["_dt"]).sort_values("_dt")
+
+            if not df_plot.empty:
+                st.markdown('<div class="section-title">Linha do Tempo — Comissionamento dos Sensores</div>',
+                            unsafe_allow_html=True)
+
+                # Agrupa por mês para histogram
+                df_plot["_mes"] = df_plot["_dt"].dt.to_period("M").dt.to_timestamp()
+                contagem_mes    = df_plot.groupby("_mes").size().reset_index(name="qtd")
+
+                fig_timeline = go.Figure()
+
+                # Barras de comissionamento por mês
+                fig_timeline.add_trace(go.Bar(
+                    x=contagem_mes["_mes"],
+                    y=contagem_mes["qtd"],
+                    name="Sensores comissionados",
+                    marker=dict(
+                        color=contagem_mes["qtd"],
+                        colorscale=[[0, "rgba(0,217,255,0.4)"], [1, "#A7C5E2"]],
+                        line=dict(color="#A7C5E2", width=0.5),
+                    ),
+                    hovertemplate="<b>%{x|%b/%Y}</b><br>%{y} sensor(es)<extra></extra>",
+                ))
+
+                # Acumulado como linha
+                contagem_mes["acumulado"] = contagem_mes["qtd"].cumsum()
+                fig_timeline.add_trace(go.Scatter(
+                    x=contagem_mes["_mes"],
+                    y=contagem_mes["acumulado"],
+                    mode="lines+markers",
+                    name="Acumulado",
+                    line=dict(color="#4E9D2D", width=2, dash="dot"),
+                    marker=dict(size=6, color="#4E9D2D"),
+                    yaxis="y2",
+                    hovertemplate="<b>%{x|%b/%Y}</b><br>Acumulado: %{y}<extra></extra>",
+                ))
+
+                fig_timeline.update_layout(
+                    paper_bgcolor="#0e1820",
+                    plot_bgcolor="#162130",
+                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    title=dict(
+                        text="<b>Comissionamento IMx-1</b>  ·  Sensores por Mês",
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(
+                        gridcolor="#2a3f52", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                        title=dict(text="Mês de Comissionamento", font=dict(color="#98C0B8", size=11)),
+                    ),
+                    yaxis=dict(
+                        gridcolor="#2a3f52", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                        title=dict(text="Qtd. Sensores / Mês", font=dict(color="#98C0B8", size=11)),
+                    ),
+                    yaxis2=dict(
+                        title=dict(text="Acumulado", font=dict(color="#4E9D2D", size=10)),
+                        overlaying="y", side="right",
+                        gridcolor="rgba(0,0,0,0)",
+                        tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#4E9D2D"),
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
+                        font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                        orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+                    ),
+                    bargap=0.25,
+                    hovermode="x unified",
+                    margin=dict(l=60, r=70, t=70, b=60),
+                    height=400,
+                )
+                st.plotly_chart(fig_timeline, use_container_width=True)
+
+            # ── Gráfico 2: Bateria vs Dias de Uso (scatter) ───────────
+            df_bat = df_imx.dropna(subset=["BatteryLevel", "DiasDeUso"]).copy()
+            df_bat = df_bat[df_bat["DiasDeUso"] > 0]
+
+            if not df_bat.empty:
+                st.markdown('<div class="section-title">Saúde da Bateria vs. Tempo em Campo</div>',
+                            unsafe_allow_html=True)
+
+                # Colormap por nível de bateria
+                def _bat_color(b):
+                    if b >= 70:  return "#4E9D2D"
+                    if b >= 40:  return "#BA944B"
+                    return "#F06A22"
+
+                df_bat["_cor"] = df_bat["BatteryLevel"].apply(_bat_color)
+                df_bat["_tip"] = df_bat.apply(
+                    lambda r: (f"<b>{r['MachineName']}</b><br>"
+                               f"HW: {r['HardwareID']}<br>"
+                               f"Bateria: {r['BatteryLevel']:.1f}%<br>"
+                               f"Dias em campo: {r['DiasDeUso']}<br>"
+                               f"Taxa consumo: {r['TaxaConsumoBateria']:.4f}%/dia"
+                               if r['TaxaConsumoBateria'] else
+                               f"<b>{r['MachineName']}</b><br>HW: {r['HardwareID']}<br>"
+                               f"Bateria: {r['BatteryLevel']:.1f}%<br>Dias: {r['DiasDeUso']}"),
+                    axis=1,
+                )
+
+                fig_bat = go.Figure()
+
+                # Zonas de alerta de fundo
+                max_dias = int(df_bat["DiasDeUso"].max() * 1.1) or 365
+                fig_bat.add_hrect(y0=0,  y1=40,  fillcolor="rgba(240,106,34,0.06)",
+                                  line_width=0, annotation_text="⚠ Crítico",
+                                  annotation_position="right",
+                                  annotation_font=dict(color="#F06A22", size=9))
+                fig_bat.add_hrect(y0=40, y1=70,  fillcolor="rgba(186,148,75,0.05)",
+                                  line_width=0, annotation_text="Atenção",
+                                  annotation_position="right",
+                                  annotation_font=dict(color="#BA944B", size=9))
+                fig_bat.add_hrect(y0=70, y1=100, fillcolor="rgba(78,157,45,0.05)",
+                                  line_width=0, annotation_text="Normal",
+                                  annotation_position="right",
+                                  annotation_font=dict(color="#4E9D2D", size=9))
+
+                fig_bat.add_trace(go.Scatter(
+                    x=df_bat["DiasDeUso"],
+                    y=df_bat["BatteryLevel"],
+                    mode="markers",
+                    name="Sensor IMx-1",
+                    marker=dict(
+                        size=10,
+                        color=df_bat["_cor"].tolist(),
+                        line=dict(color="rgba(255,255,255,0.15)", width=1),
+                        opacity=0.85,
+                    ),
+                    text=df_bat["MachineName"],
+                    customdata=df_bat[["HardwareID", "TaxaConsumoBateria"]].values,
+                    hovertemplate=(
+                        "<b>%{text}</b><br>"
+                        "HW: %{customdata[0]}<br>"
+                        "Bateria: <b>%{y:.1f}%</b><br>"
+                        "Dias em campo: %{x}<br>"
+                        "Taxa: %{customdata[1]:.4f}%/dia<extra></extra>"
+                    ),
+                ))
+
+                # Linha de tendência (regressão linear simples)
+                if len(df_bat) >= 3:
+                    x_vals = df_bat["DiasDeUso"].values
+                    y_vals = df_bat["BatteryLevel"].values
+                    coef   = np.polyfit(x_vals, y_vals, 1)
+                    x_line = np.linspace(x_vals.min(), x_vals.max(), 100)
+                    y_line = np.polyval(coef, x_line)
+                    fig_bat.add_trace(go.Scatter(
+                        x=x_line, y=y_line,
+                        mode="lines",
+                        name=f"Tendência ({coef[0]:.4f}%/dia)",
+                        line=dict(color="rgba(94,105,158,0.6)", width=1.5, dash="dash"),
+                        hoverinfo="skip",
+                    ))
+
+                fig_bat.update_layout(
+                    paper_bgcolor="#0e1820",
+                    plot_bgcolor="#162130",
+                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    title=dict(
+                        text="<b>Bateria Residual vs. Dias em Campo</b>",
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(
+                        gridcolor="#2a3f52", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                        title=dict(text="Dias em Campo (desde 1ª medição)", font=dict(color="#98C0B8", size=11)),
+                    ),
+                    yaxis=dict(
+                        gridcolor="#2a3f52", zeroline=False,
+                        range=[0, 105],
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                        title=dict(text="Bateria Residual [%]", font=dict(color="#98C0B8", size=11)),
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
+                        font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                        orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+                    ),
+                    hovermode="closest",
+                    margin=dict(l=60, r=80, t=70, b=60),
+                    height=420,
+                )
+                st.plotly_chart(fig_bat, use_container_width=True)
+
+            # ── Gráfico 3: Taxa de consumo de bateria (ranking horizontal) ──
+            df_taxa = df_imx.dropna(subset=["TaxaConsumoBateria"]).copy()
+            df_taxa = df_taxa[df_taxa["TaxaConsumoBateria"] > 0].sort_values(
+                "TaxaConsumoBateria", ascending=True
+            ).tail(25)   # top 25 maiores consumidores
+
+            if not df_taxa.empty:
+                st.markdown('<div class="section-title">Taxa de Consumo de Bateria — Top Sensores</div>',
+                            unsafe_allow_html=True)
+
+                bar_colors = [
+                    "#F06A22" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.75)
+                    else "#BA944B" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.40)
+                    else "#4E9D2D"
+                    for v in df_taxa["TaxaConsumoBateria"]
+                ]
+
+                fig_taxa = go.Figure(go.Bar(
+                    x=df_taxa["TaxaConsumoBateria"],
+                    y=df_taxa["MachineName"],
+                    orientation="h",
+                    marker=dict(
+                        color=bar_colors,
+                        line=dict(color="rgba(255,255,255,0.1)", width=0.5),
+                    ),
+                    customdata=df_taxa[["HardwareID", "BatteryLevel", "DiasDeUso"]].values,
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "HW: %{customdata[0]}<br>"
+                        "Taxa: <b>%{x:.4f}%/dia</b><br>"
+                        "Bateria: %{customdata[1]:.1f}%<br>"
+                        "Dias em campo: %{customdata[2]}<extra></extra>"
+                    ),
+                ))
+
+                fig_taxa.update_layout(
+                    paper_bgcolor="#0e1820",
+                    plot_bgcolor="#162130",
+                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    title=dict(
+                        text="<b>Taxa de Consumo de Bateria</b>  ·  % consumida por dia",
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(
+                        gridcolor="#2a3f52", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
+                        title=dict(text="Taxa de Consumo [%/dia]", font=dict(color="#98C0B8", size=11)),
+                    ),
+                    yaxis=dict(
+                        gridcolor="rgba(0,0,0,0)",
+                        tickfont=dict(family="Exo 2, sans-serif", size=10, color="#A7C5E2"),
+                    ),
+                    hovermode="y",
+                    margin=dict(l=200, r=40, t=70, b=60),
+                    height=max(380, len(df_taxa) * 26 + 120),
+                )
+                st.plotly_chart(fig_taxa, use_container_width=True)
+
+            # ── Tabela completa e exportação ──────────
+            st.markdown('<div class="section-title">Tabela de Resultados</div>',
+                        unsafe_allow_html=True)
+
+            # Formata colunas para exibição
+            df_show_imx = df_imx.copy()
+            if "BatteryLevel" in df_show_imx.columns:
+                df_show_imx["BatteryLevel"] = df_show_imx["BatteryLevel"].apply(
+                    lambda x: f"{x:.1f}%" if x == x else "—"
+                )
+            if "TaxaConsumoBateria" in df_show_imx.columns:
+                df_show_imx["TaxaConsumoBateria"] = df_show_imx["TaxaConsumoBateria"].apply(
+                    lambda x: f"{x:.4f}%/dia" if x == x and x is not None else "—"
+                )
+            if "DiasDeUso" in df_show_imx.columns:
+                df_show_imx["DiasDeUso"] = df_show_imx["DiasDeUso"].apply(
+                    lambda x: f"{int(x)} dias" if x == x and x is not None else "—"
+                )
+
+            st.dataframe(
+                df_show_imx,
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+                column_config={
+                    "HardwareID":                   st.column_config.TextColumn("Hardware ID"),
+                    "IDNode":                       st.column_config.NumberColumn("IDNode"),
+                    "MachineID":                    st.column_config.NumberColumn("Machine ID"),
+                    "MachineName":                  st.column_config.TextColumn("Equipamento"),
+                    "BatteryLevel":                 st.column_config.TextColumn("Bateria"),
+                    "SystemCreatedDate":            st.column_config.TextColumn("Criado no Sistema"),
+                    "DataPrimeiraLeitura":          st.column_config.TextColumn("1ª Leitura Tendência"),
+                    "DataClearedSensor":            st.column_config.TextColumn("ClearedDate Sensor"),
+                    "ProvavelDataComissionamento":  st.column_config.TextColumn("✅ Comissionamento Efetivo"),
+                    "FonteComissionamento":         st.column_config.TextColumn("Fonte"),
+                    "DiasDeUso":                    st.column_config.TextColumn("Dias em Campo"),
+                    "TaxaConsumoBateria":           st.column_config.TextColumn("Taxa Consumo Bat."),
+                },
+            )
+
+            # Exportação CSV
+            csv_imx = df_imx.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇  Exportar DataFrame IMx-1 (CSV)",
+                data=csv_imx,
+                file_name=f"imx1_comissionamento_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                type="primary",
+            )
+
+            # Log do último scan
+            if st.session_state.imx_log:
+                with st.expander("📋  Log da Varredura"):
+                    st.code("\n".join(st.session_state.imx_log), language=None)
+
+# ══════════════════════════════════════════════
+# TAB 3 — FLEET MONITORING
+# ══════════════════════════════════════════════
+with tab_fleet:
 
     st.markdown('<div class="section-title">Fleet Monitoring — Conectividade e Saúde da Rede</div>',
                 unsafe_allow_html=True)
@@ -2299,4 +3337,3 @@ with st.sidebar:
         if st.session_state.fleet_log:
             with st.expander("📋  Log da Coleta de Frota"):
                 st.code("\n".join(st.session_state.fleet_log), language=None)
-# ══════════════════════════════════════════════
