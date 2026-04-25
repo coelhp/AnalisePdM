@@ -1647,11 +1647,12 @@ with st.sidebar:
                 st.rerun()
 
     # URL ativa — exibe apenas, sem campo editável por padrão
+    _active_url = st.session_state.get("base_url", "—")
     st.markdown(
         f'<div style="font-family:Share Tech Mono,monospace;font-size:0.68rem;'
         f'color:#4a5a6a;word-break:break-all;margin:4px 0 12px 0;padding:6px 8px;'
         f'background:#162130;border-radius:4px;border:1px solid #2a3f52;">'
-        f'{st.session_state.base_url}</div>',
+        f'{_active_url}</div>',
         unsafe_allow_html=True,
     )
 
