@@ -26,28 +26,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ─────────────────────────────────────────────
-# CSS GLOBAL — LDC Brand Theme
-# ─────────────────────────────────────────────
-# Paleta principal LDC
-#   --accent  : LDC Blue    #32556E  (tom de comando, destaque primário)
-#   --accent2 : #007CAA     (azul vivo — hover, links)
-#   --accent3 : #A7C5E2     (azul claro — fills suaves)
-#   --ok      : LDC Green   #4E9D2D  (sucesso / normal)
-#   --ok-deep : #247F3B     (verde escuro — ênfase de sucesso)
-#   --warn    : #BA944B     (âmbar LDC — alertas)
-#   --danger  : #F06A22     (laranja LDC — crítico)
-#   --teal    : #379A8D     (saúde / secundário)
-#   --bg-base : derivado do LDC Blue escurecido
-#   --grey    : LDC Grey    #5C6670
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@300;400;600&display=swap');
 
 :root {
     /* ── Backgrounds ── */
-    --bg-base:      #0e1820;        /* LDC Blue escurecido */
+    --bg-base:      #0e1820;        /* Blue escurecido */
     --bg-card:      #162130;        /* card principal */
     --bg-panel:     #1c2b3a;        /* painéis internos */
 
@@ -56,12 +41,12 @@ st.markdown("""
     --border-glow:  #32556E;
 
     /* ── Paleta LDC ── */
-    --accent:       #A7C5E2;        /* LDC Blue claro — destaque primário */
-    --accent-solid: #32556E;        /* LDC Blue sólido */
+    --accent:       #A7C5E2;        /* Blue claro — destaque primário */
+    --accent-solid: #32556E;        /* Blue sólido */
     --accent-deep:  #007CAA;        /* azul vivo — hover */
     --accent-glow:  rgba(50,85,110,0.25);
 
-    --ok:           #4E9D2D;        /* LDC Green */
+    --ok:           #4E9D2D;        /* Green */
     --ok-deep:      #247F3B;        /* verde escuro */
     --ok-light:     #B9C966;        /* verde claro */
 
@@ -74,7 +59,7 @@ st.markdown("""
     --teal:         #379A8D;        /* teal — saúde/info */
     --teal-light:   #98C0B8;
 
-    --grey:         #5C6670;        /* LDC Grey */
+    --grey:         #5C6670;        /* Grey */
     --purple:       #5E699E;        /* eixo secundário */
 
     /* ── Texto ── */
