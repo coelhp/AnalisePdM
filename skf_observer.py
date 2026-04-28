@@ -1,5 +1,5 @@
 """
-SKF Observer Phoenix — Dashboard de Monitoramento
+SKF Observer -  Dashboard de Monitoramento
 ==================================================
 App para consulta e visualização de dados de tendência.
 """
