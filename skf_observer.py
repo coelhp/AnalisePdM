@@ -1,7 +1,7 @@
 """
 SKF Observer Phoenix — Dashboard de Monitoramento
 ==================================================
-Streamlit app para consulta e visualização de dados de tendência.
+FastApp para consulta e visualização de dados de tendência.
 """
 
 import streamlit as st
@@ -120,7 +120,7 @@ section[data-testid="stSidebar"] * { font-family: var(--font-body) !important; }
     font-family: var(--font-mono); font-size: 0.68rem;
     color: var(--text-mid); letter-spacing: 2px;
     text-transform: uppercase; margin-bottom: 6px;
-}
+}https://github.com/coelhp/AnalisePdM/blob/main/skf_observer.py
 .metric-card .value {
     font-family: var(--font-head); font-size: 1.9rem;
     font-weight: 700; color: var(--accent); line-height: 1;
