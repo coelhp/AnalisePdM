@@ -1,7 +1,7 @@
 """
 SKF Observer Phoenix — Dashboard de Monitoramento
 ==================================================
-FastApp para consulta e visualização de dados de tendência.
+App para consulta e visualização de dados de tendência.
 """
 
 import streamlit as st
