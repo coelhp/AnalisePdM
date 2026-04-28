@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# CSS GLOBAL — LDC Brand Theme
+# CSS GLOBAL — Brand Theme
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
