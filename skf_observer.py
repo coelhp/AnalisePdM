@@ -16,7 +16,7 @@ import numpy as np
 # PAGE CONFIG
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="SKF Observer Phoenix",
+    page_title="SKF Observer",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded",
