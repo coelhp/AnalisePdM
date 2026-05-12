@@ -1,7 +1,7 @@
 """
-SKF Observer -  Dashboard de Monitoramento
+SKF Observer Phoenix — Dashboard de Monitoramento
 ==================================================
-App para consulta e visualização de dados de tendência.
+Streamlit app para consulta e visualização de dados de tendência.
 """
 
 import streamlit as st
@@ -16,14 +16,14 @@ import numpy as np
 # PAGE CONFIG
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="SKF Observer",
+    page_title="SKF Observer Phoenix",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ─────────────────────────────────────────────
-# CSS GLOBAL — Brand Theme
+# CSS GLOBAL — LDC Brand Theme
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -120,7 +120,7 @@ section[data-testid="stSidebar"] * { font-family: var(--font-body) !important; }
     font-family: var(--font-mono); font-size: 0.68rem;
     color: var(--text-mid); letter-spacing: 2px;
     text-transform: uppercase; margin-bottom: 6px;
-}https://github.com/coelhp/AnalisePdM/blob/main/skf_observer.py
+}
 .metric-card .value {
     font-family: var(--font-head); font-size: 1.9rem;
     font-weight: 700; color: var(--accent); line-height: 1;
@@ -289,6 +289,98 @@ def get_assets(base_url, token):
     )
     resp.raise_for_status()
     return resp.json() if resp.status_code != 204 else []
+
+
+def build_asset_index(assets_list: list) -> dict:
+    """
+    Monta {machine_id: {Unidade, Area, Setor, Equipamento, Ativo, PathCompleto, Descricao}}
+    a partir do campo Path do /v2/assets — sem chamadas extras à API.
+
+    Hierarquia completa (5 níveis — Área presente = "Moagem"):
+        Unidade / Área(Moagem) / Setor / Equipamento / Ativo
+        ex: "LDC_ALTO_ARAGUAIA / Moagem / Preparação / 13SR / Redutor"
+
+    Hierarquia reduzida (4 níveis — sem Área):
+        Unidade / Setor / Equipamento / Ativo
+        ex: "LDC_PONTA_GROSSA / Extração / 07SR / Motor"
+
+    Hierarquia mínima (3 níveis — sem Área e sem Ativo):
+        Unidade / Setor / Equipamento
+        ex: "LDC_JATAI / Preparação / 22SR"
+
+    Regra de detecção de Área: o nível 1 é Área SOMENTE se seu valor
+    for exatamente "Moagem" (case-insensitive). Qualquer outro valor
+    indica que a Área está ausente e o nível 1 já é o Setor.
+
+    Separadores suportados: / \\ > |
+    Campos ausentes ficam como "—".
+    """
+    import re as _re
+
+    def _is_area(text: str) -> bool:
+        """Área é identificada exclusivamente pelo valor 'Moagem'."""
+        return text.strip().lower() == "moagem"
+
+    index = {}
+    for a in assets_list:
+        mid = a.get("ID") or a.get("id")
+        if mid is None:
+            continue
+        path = a.get("Path") or a.get("path") or ""
+        desc = a.get("Description") or a.get("description") or ""
+
+        parts = [p.strip() for p in _re.split(r"[/\\>|]", path) if p.strip()]
+        n = len(parts)
+
+        unidade = parts[0] if n > 0 else "—"
+
+        if n >= 5:
+            # 5+ partes: estrutura completa com Área
+            # Unidade / Área / Setor / Equipamento / Ativo [/ Ponto...]
+            area        = parts[1]
+            setor       = parts[2]
+            equipamento = parts[3]
+            ativo       = parts[4]
+
+        elif n == 4:
+            # 4 partes: verifica se nível 1 é "Moagem" (Área presente)
+            # Se sim: Unidade / Moagem / Setor / Equipamento  → Ativo vem de Description
+            # Se não: Unidade / Setor  / Equipamento / Ativo  → estrutura sem Área
+            if _is_area(parts[1]):
+                area        = parts[1]
+                setor       = parts[2]
+                equipamento = parts[3]
+                ativo       = desc.strip() or "—"
+            else:
+                area        = "—"
+                setor       = parts[1]
+                equipamento = parts[2]
+                ativo       = parts[3]
+
+        elif n == 3:
+            # 3 partes: Unidade / Setor / Equipamento  (sem Área e sem Ativo)
+            area        = "—"
+            setor       = parts[1]
+            equipamento = parts[2]
+            ativo       = desc.strip() or "—"
+
+        else:
+            # 1–2 partes: incompleto
+            area        = "—"
+            setor       = parts[1] if n > 1 else "—"
+            equipamento = "—"
+            ativo       = desc.strip() or "—"
+
+        index[int(mid)] = {
+            "Unidade":      unidade,
+            "Area":         area,
+            "Setor":        setor,
+            "Equipamento":  equipamento,
+            "Ativo":        ativo,
+            "PathCompleto": path,
+            "Descricao":    desc,
+        }
+    return index
 
 def get_points(base_url, token, machine_id):
     resp = requests.get(
@@ -759,6 +851,8 @@ def run_imx_scan(base_url: str, username: str, password: str,
     total = len(assets_list)
     log(f"🏭 {total} asset(s) encontrado(s).")
     prog(0.02, f"0 / {total} assets processados")
+    # Índice de localização: {machine_id: {Planta, Setor, Area, TipoEquipamento}}
+    asset_index = build_asset_index(assets_list)
 
     # ── 3. Sensores IMx (metadados) ───────────────
     token = _ensure_token(base_url, username, password)
@@ -927,6 +1021,11 @@ def run_imx_scan(base_url: str, username: str, password: str,
                 "IDNode":                      id_node,
                 "MachineID":                   machine_id,
                 "MachineName":                 machine_name,
+                "Unidade":                     asset_index.get(int(machine_id) if machine_id else 0, {}).get("Unidade", "—"),
+                "Area":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
+                "Setor":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
+                "Equipamento":                 asset_index.get(int(machine_id) if machine_id else 0, {}).get("Equipamento", "—"),
+                "Ativo":                       asset_index.get(int(machine_id) if machine_id else 0, {}).get("Ativo", "—"),
                 "BatteryLevel":                battery_lvl,
                 "SystemCreatedDate":           sys_created,
                 "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
@@ -944,7 +1043,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
 
     if not rows:
         return pd.DataFrame(columns=[
-            "HardwareID", "IDNode", "MachineID", "MachineName", "BatteryLevel",
+            "HardwareID", "IDNode", "MachineID", "MachineName", "Unidade", "Area", "Setor", "Equipamento", "Ativo", "BatteryLevel",
             "SystemCreatedDate", "DataPrimeiraLeitura", "DataClearedSensor",
             "ProvavelDataComissionamento", "FonteComissionamento",
             "DiasDeUso", "TaxaConsumoBateria",
@@ -1050,6 +1149,34 @@ def run_fleet_scan(base_url: str, username: str, password: str,
     log("🔑 Token obtido.")
     prog(0.05, "Autenticado")
 
+    # ── 1b. Índice de localização por IDNode ──────────────────────
+    # Carrega assets e cruza com points para mapear IDNode → Planta/Setor/Área/Tipo
+    node_location: dict[int, dict] = {}
+    try:
+        assets_list  = get_assets(base_url, token)
+        asset_idx    = build_asset_index(assets_list)
+        token        = _ensure_token(base_url, username, password)
+        for a in assets_list:
+            mid = a.get("ID") or a.get("id")
+            if mid is None:
+                continue
+            try:
+                pts = get_points_v1(base_url, token, mid)
+            except Exception:
+                pts = []
+            for p in (pts or []):
+                nid = p.get("ParentID") or p.get("IDNode") or p.get("NodeID")
+                try:
+                    nid = int(nid)
+                except (TypeError, ValueError):
+                    nid = None
+                if nid is not None and int(mid) in asset_idx:
+                    node_location[nid] = asset_idx[int(mid)]
+        log(f"  ✓ Localização mapeada para {len(node_location)} IDNode(s).")
+    except Exception as e:
+        log(f"  ⚠ Índice de localização indisponível: {e}")
+    prog(0.12, "Localização mapeada")
+
     # ── 2. Gateways ───────────────────────────────────────────────
     log("📡 Coletando gateways…")
     try:
@@ -1149,6 +1276,9 @@ def run_fleet_scan(base_url: str, username: str, password: str,
                 "DiagnosticCode":    diag_code,
                 "DiagFlags":         ", ".join(diag_flags) if diag_flags else "—",
                 "AlertLevel":        alert_level,
+                # Localização via cruzamento IDNode → asset_index
+                **{k: node_location.get(int(s.get("IDNode") or s.get("idNode") or 0), {}).get(k, "—")
+                   for k in ("Unidade", "Area", "Setor", "Equipamento", "Ativo")},
             })
 
         result["sensors"] = pd.DataFrame(sensor_rows)
@@ -1265,6 +1395,8 @@ def run_imx_scan(base_url: str, username: str, password: str,
     total = len(assets_list)
     log(f"🏭 {total} asset(s) encontrado(s).")
     prog(0.02, f"0 / {total} assets processados")
+    # Índice de localização: {machine_id: {Planta, Setor, Area, TipoEquipamento}}
+    asset_index = build_asset_index(assets_list)
 
     # ── 3. Sensores IMx (metadados) ───────────────
     token = _ensure_token(base_url, username, password)
@@ -1433,6 +1565,11 @@ def run_imx_scan(base_url: str, username: str, password: str,
                 "IDNode":                      id_node,
                 "MachineID":                   machine_id,
                 "MachineName":                 machine_name,
+                "Unidade":                     asset_index.get(int(machine_id) if machine_id else 0, {}).get("Unidade", "—"),
+                "Area":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
+                "Setor":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
+                "Equipamento":                 asset_index.get(int(machine_id) if machine_id else 0, {}).get("Equipamento", "—"),
+                "Ativo":                       asset_index.get(int(machine_id) if machine_id else 0, {}).get("Ativo", "—"),
                 "BatteryLevel":                battery_lvl,
                 "SystemCreatedDate":           sys_created,
                 "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
@@ -1450,7 +1587,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
 
     if not rows:
         return pd.DataFrame(columns=[
-            "HardwareID", "IDNode", "MachineID", "MachineName", "BatteryLevel",
+            "HardwareID", "IDNode", "MachineID", "MachineName", "Unidade", "Area", "Setor", "Equipamento", "Ativo", "BatteryLevel",
             "SystemCreatedDate", "DataPrimeiraLeitura", "DataClearedSensor",
             "ProvavelDataComissionamento", "FonteComissionamento",
             "DiasDeUso", "TaxaConsumoBateria",
@@ -2648,6 +2785,11 @@ with tab_imx:
                     "IDNode":                       st.column_config.NumberColumn("IDNode"),
                     "MachineID":                    st.column_config.NumberColumn("Machine ID"),
                     "MachineName":                  st.column_config.TextColumn("Equipamento"),
+                    "Unidade":                      st.column_config.TextColumn("Unidade"),
+                    "Area":                         st.column_config.TextColumn("Área"),
+                    "Setor":                        st.column_config.TextColumn("Setor"),
+                    "Equipamento":                  st.column_config.TextColumn("Equipamento"),
+                    "Ativo":                        st.column_config.TextColumn("Ativo"),
                     "BatteryLevel":                 st.column_config.TextColumn("Bateria"),
                     "SystemCreatedDate":            st.column_config.TextColumn("Criado no Sistema"),
                     "DataPrimeiraLeitura":          st.column_config.TextColumn("1ª Leitura Tendência"),
@@ -2968,14 +3110,15 @@ with tab_fleet:
                     textposition="middle center",
                     textfont=dict(size=10),
                     customdata=df_mesh[["HardwareID", "ConnectionState",
-                                        "DiagFlags", "GatewayID"]].values,
+                                        "DiagFlags", "Unidade", "Area", "Setor", "Ativo"]].values,
                     hovertemplate=(
                         "<b>%{customdata[0]}</b><br>"
                         "Estado: %{customdata[1]}<br>"
                         "Bateria: <b>%{y:.1f}%</b><br>"
                         "Dias sem update: %{x}<br>"
                         "Diagnóstico: %{customdata[2]}<br>"
-                        "Gateway: %{customdata[3]}<extra></extra>"
+                        "📍 %{customdata[3]} › %{customdata[4]} › %{customdata[5]} › %{customdata[6]}"
+                        "<extra></extra>"
                     ),
                     showlegend=False,
                 ))
@@ -3100,6 +3243,11 @@ with tab_fleet:
                         "IDNode":            st.column_config.NumberColumn("IDNode"),
                         "HardwareID":        st.column_config.TextColumn("Hardware ID"),
                         "GatewayID":         st.column_config.NumberColumn("Gateway ID"),
+                        "Unidade":           st.column_config.TextColumn("Unidade"),
+                        "Area":              st.column_config.TextColumn("Área"),
+                        "Setor":             st.column_config.TextColumn("Setor"),
+                        "Equipamento":       st.column_config.TextColumn("Equipamento"),
+                        "Ativo":             st.column_config.TextColumn("Ativo"),
                         "ConnectionState":   st.column_config.TextColumn("Estado Conexão"),
                         "BatteryLevel":      st.column_config.ProgressColumn(
                                                 "Bateria", min_value=0, max_value=100,
