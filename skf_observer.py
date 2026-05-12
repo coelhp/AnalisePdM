@@ -1023,9 +1023,10 @@ def run_imx_scan(base_url: str, username: str, password: str,
                 "MachineName":                 machine_name,
                 "Unidade":                     asset_index.get(int(machine_id) if machine_id else 0, {}).get("Unidade", "—"),
                 "Area":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
-                "Setor":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
+                "Setor":                       asset_index.get(int(machine_id) if machine_id else 0, {}).get("Setor", "—"),
                 "Equipamento":                 asset_index.get(int(machine_id) if machine_id else 0, {}).get("Equipamento", "—"),
                 "Ativo":                       asset_index.get(int(machine_id) if machine_id else 0, {}).get("Ativo", "—"),
+                "NomePonto":                   (target_point.get("Name") or target_point.get("name") or target_point.get("description") or "—"),
                 "BatteryLevel":                battery_lvl,
                 "SystemCreatedDate":           sys_created,
                 "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
@@ -1043,7 +1044,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
 
     if not rows:
         return pd.DataFrame(columns=[
-            "HardwareID", "IDNode", "MachineID", "MachineName", "Unidade", "Area", "Setor", "Equipamento", "Ativo", "BatteryLevel",
+            "HardwareID", "IDNode", "MachineID", "MachineName", "Unidade", "Area", "Setor", "Equipamento", "Ativo", "NomePonto", "BatteryLevel",
             "SystemCreatedDate", "DataPrimeiraLeitura", "DataClearedSensor",
             "ProvavelDataComissionamento", "FonteComissionamento",
             "DiasDeUso", "TaxaConsumoBateria",
@@ -1149,33 +1150,18 @@ def run_fleet_scan(base_url: str, username: str, password: str,
     log("🔑 Token obtido.")
     prog(0.05, "Autenticado")
 
-    # ── 1b. Índice de localização por IDNode ──────────────────────
-    # Carrega assets e cruza com points para mapear IDNode → Planta/Setor/Área/Tipo
-    node_location: dict[int, dict] = {}
+    # Índice de localização por machine_id (construído dos assets, sem chamadas extras)
+    # O cruzamento IDNode → localização é feito APÓS coletar os sensores,
+    # usando o campo IDMachine/IDAsset que o nextgensensor já retorna.
     try:
-        assets_list  = get_assets(base_url, token)
-        asset_idx    = build_asset_index(assets_list)
-        token        = _ensure_token(base_url, username, password)
-        for a in assets_list:
-            mid = a.get("ID") or a.get("id")
-            if mid is None:
-                continue
-            try:
-                pts = get_points_v1(base_url, token, mid)
-            except Exception:
-                pts = []
-            for p in (pts or []):
-                nid = p.get("ParentID") or p.get("IDNode") or p.get("NodeID")
-                try:
-                    nid = int(nid)
-                except (TypeError, ValueError):
-                    nid = None
-                if nid is not None and int(mid) in asset_idx:
-                    node_location[nid] = asset_idx[int(mid)]
-        log(f"  ✓ Localização mapeada para {len(node_location)} IDNode(s).")
+        assets_list = get_assets(base_url, token)
+        asset_idx   = build_asset_index(assets_list)
+        # Índice rápido machine_id → localização (sem loop de points)
+        log(f"  ✓ {len(asset_idx)} asset(s) indexado(s) para localização.")
     except Exception as e:
-        log(f"  ⚠ Índice de localização indisponível: {e}")
-    prog(0.12, "Localização mapeada")
+        asset_idx = {}
+        log(f"  ⚠ Índice de assets indisponível: {e}")
+    prog(0.10, "Assets indexados")
 
     # ── 2. Gateways ───────────────────────────────────────────────
     log("📡 Coletando gateways…")
@@ -1276,8 +1262,12 @@ def run_fleet_scan(base_url: str, username: str, password: str,
                 "DiagnosticCode":    diag_code,
                 "DiagFlags":         ", ".join(diag_flags) if diag_flags else "—",
                 "AlertLevel":        alert_level,
-                # Localização via cruzamento IDNode → asset_index
-                **{k: node_location.get(int(s.get("IDNode") or s.get("idNode") or 0), {}).get(k, "—")
+                # Localização: cruza pelo IDAsset/IDMachine que o nextgensensor retorna
+                **{k: asset_idx.get(
+                        int(s.get("IDAsset") or s.get("idAsset") or
+                            s.get("IDMachine") or s.get("idMachine") or 0),
+                        {}
+                    ).get(k, "—")
                    for k in ("Unidade", "Area", "Setor", "Equipamento", "Ativo")},
             })
 
@@ -1567,9 +1557,10 @@ def run_imx_scan(base_url: str, username: str, password: str,
                 "MachineName":                 machine_name,
                 "Unidade":                     asset_index.get(int(machine_id) if machine_id else 0, {}).get("Unidade", "—"),
                 "Area":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
-                "Setor":                        asset_index.get(int(machine_id) if machine_id else 0, {}).get("Area", "—"),
+                "Setor":                       asset_index.get(int(machine_id) if machine_id else 0, {}).get("Setor", "—"),
                 "Equipamento":                 asset_index.get(int(machine_id) if machine_id else 0, {}).get("Equipamento", "—"),
                 "Ativo":                       asset_index.get(int(machine_id) if machine_id else 0, {}).get("Ativo", "—"),
+                "NomePonto":                   (target_point.get("Name") or target_point.get("name") or target_point.get("description") or "—"),
                 "BatteryLevel":                battery_lvl,
                 "SystemCreatedDate":           sys_created,
                 "DataPrimeiraLeitura":         commissioning_dt.strftime("%Y-%m-%d %H:%M:%S") if commissioning_dt else None,
@@ -1587,7 +1578,7 @@ def run_imx_scan(base_url: str, username: str, password: str,
 
     if not rows:
         return pd.DataFrame(columns=[
-            "HardwareID", "IDNode", "MachineID", "MachineName", "Unidade", "Area", "Setor", "Equipamento", "Ativo", "BatteryLevel",
+            "HardwareID", "IDNode", "MachineID", "MachineName", "Unidade", "Area", "Setor", "Equipamento", "Ativo", "NomePonto", "BatteryLevel",
             "SystemCreatedDate", "DataPrimeiraLeitura", "DataClearedSensor",
             "ProvavelDataComissionamento", "FonteComissionamento",
             "DiasDeUso", "TaxaConsumoBateria",
@@ -2784,12 +2775,13 @@ with tab_imx:
                     "HardwareID":                   st.column_config.TextColumn("Hardware ID"),
                     "IDNode":                       st.column_config.NumberColumn("IDNode"),
                     "MachineID":                    st.column_config.NumberColumn("Machine ID"),
-                    "MachineName":                  st.column_config.TextColumn("Equipamento"),
+                    "MachineName":                  st.column_config.TextColumn("Máquina"),
                     "Unidade":                      st.column_config.TextColumn("Unidade"),
                     "Area":                         st.column_config.TextColumn("Área"),
                     "Setor":                        st.column_config.TextColumn("Setor"),
                     "Equipamento":                  st.column_config.TextColumn("Equipamento"),
                     "Ativo":                        st.column_config.TextColumn("Ativo"),
+                    "NomePonto":                    st.column_config.TextColumn("Ponto de Medição"),
                     "BatteryLevel":                 st.column_config.TextColumn("Bateria"),
                     "SystemCreatedDate":            st.column_config.TextColumn("Criado no Sistema"),
                     "DataPrimeiraLeitura":          st.column_config.TextColumn("1ª Leitura Tendência"),
