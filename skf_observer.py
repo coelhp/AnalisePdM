@@ -254,8 +254,8 @@ for key, default in {
     "fleet_log":      [],
     "base_url":       "http://services.repcenter.skf.com",
     "selected_unit":  None,
-    "username":       "patrick.coelho",
-    "_password":      "",
+    "username":       "USER",
+    "_password":      "PASSWORD",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -298,15 +298,15 @@ def build_asset_index(assets_list: list) -> dict:
 
     Hierarquia completa (5 níveis — Área presente = "Moagem"):
         Unidade / Área(Moagem) / Setor / Equipamento / Ativo
-        ex: "LDC_ALTO_ARAGUAIA / Moagem / Preparação / 13SR / Redutor"
+        ex: "FÁBRICA 1 / Moagem / Preparação / 13SR / Redutor"
 
     Hierarquia reduzida (4 níveis — sem Área):
         Unidade / Setor / Equipamento / Ativo
-        ex: "LDC_PONTA_GROSSA / Extração / 07SR / Motor"
+        ex: "FÁBRICA 2 / Extração / 07SR / Motor"
 
     Hierarquia mínima (3 níveis — sem Área e sem Ativo):
         Unidade / Setor / Equipamento
-        ex: "LDC_JATAI / Preparação / 22SR"
+        ex: "FÁBRICA 3 / Preparação / 22SR"
 
     Regra de detecção de Área: o nível 1 é Área SOMENTE se seu valor
     for exatamente "Moagem" (case-insensitive). Qualquer outro valor
@@ -1150,18 +1150,55 @@ def run_fleet_scan(base_url: str, username: str, password: str,
     log("🔑 Token obtido.")
     prog(0.05, "Autenticado")
 
-    # Índice de localização por machine_id (construído dos assets, sem chamadas extras)
-    # O cruzamento IDNode → localização é feito APÓS coletar os sensores,
-    # usando o campo IDMachine/IDAsset que o nextgensensor já retorna.
+    # ── Índice de localização ──────────────────────────────────────
+    # Estratégia: carrega assets (1 chamada) + points por asset (N chamadas leves)
+    # para montar {IDNode → localização}. Feito uma vez, reaproveitado nos sensores.
+    asset_idx:    dict[int, dict] = {}
+    node_to_loc:  dict[int, dict] = {}
     try:
         assets_list = get_assets(base_url, token)
         asset_idx   = build_asset_index(assets_list)
-        # Índice rápido machine_id → localização (sem loop de points)
-        log(f"  ✓ {len(asset_idx)} asset(s) indexado(s) para localização.")
+        log(f"  ✓ {len(asset_idx)} asset(s) indexado(s).")
+        prog(0.08, "Assets indexados")
+
+        token = _ensure_token(base_url, username, password)
+        for a in assets_list:
+            mid = a.get("ID") or a.get("id")
+            if mid is None:
+                continue
+            mid_int = int(mid)
+            if mid_int not in asset_idx:
+                continue
+            try:
+                # Usa /v2/points (mais leve que /v1/machines/{id}/points)
+                resp_pts = requests.get(
+                    f"{base_url}/v2/points",
+                    headers={"Authorization": f"Bearer {token}",
+                             "Accept": "application/json"},
+                    params={"machine_id": mid},
+                    timeout=15,
+                )
+                pts = resp_pts.json() if resp_pts.status_code == 200 else []
+                pts = pts if isinstance(pts, list) else pts.get("value", [])
+            except Exception:
+                pts = []
+
+            for p in pts:
+                # ParentID em /v2/points é o IDNode do sensor físico
+                nid = p.get("ParentID") or p.get("parentId")
+                try:
+                    nid = int(nid)
+                except (TypeError, ValueError):
+                    nid = None
+                if nid is not None:
+                    node_to_loc[nid] = asset_idx[mid_int]
+
+            time.sleep(0.05)   # delay leve entre assets
+
+        log(f"  ✓ Localização mapeada para {len(node_to_loc)} IDNode(s).")
     except Exception as e:
-        asset_idx = {}
-        log(f"  ⚠ Índice de assets indisponível: {e}")
-    prog(0.10, "Assets indexados")
+        log(f"  ⚠ Índice de localização indisponível: {e}")
+    prog(0.18, "Localização mapeada")
 
     # ── 2. Gateways ───────────────────────────────────────────────
     log("📡 Coletando gateways…")
@@ -1262,10 +1299,9 @@ def run_fleet_scan(base_url: str, username: str, password: str,
                 "DiagnosticCode":    diag_code,
                 "DiagFlags":         ", ".join(diag_flags) if diag_flags else "—",
                 "AlertLevel":        alert_level,
-                # Localização: cruza pelo IDAsset/IDMachine que o nextgensensor retorna
-                **{k: asset_idx.get(
-                        int(s.get("IDAsset") or s.get("idAsset") or
-                            s.get("IDMachine") or s.get("idMachine") or 0),
+                # Localização: cruza pelo IDNode → node_to_loc (construído dos points)
+                **{k: node_to_loc.get(
+                        int(s.get("IDNode") or s.get("idNode") or 0),
                         {}
                     ).get(k, "—")
                    for k in ("Unidade", "Area", "Setor", "Equipamento", "Ativo")},
