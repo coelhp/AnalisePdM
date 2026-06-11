@@ -24,7 +24,6 @@ Dashboard interativo em Streamlit para consulta, análise e visualização de da
 - **Autenticação** via Bearer Token com renovação automática a cada 18 minutos
 - **Seletor de unidade** na sidebar — troca de servidor com um clique, limpando estado automaticamente
 - **3 abas independentes** cobrindo monitoramento em tempo real, comissionamento, frota e rede mesh
-- **Tema visual LDC Brand** aplicado em todo o dashboard (CSS + Plotly)
 
 ---
 
