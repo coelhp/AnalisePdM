@@ -1,7 +1,7 @@
 # SKF Observer Phoenix - Dashboard de Monitoramento
 
 Dashboard interativo em Streamlit para consulta, análise e visualização de dados do **SKF Observer Phoenix API**. Cobre desde tendências de medição individuais até a topologia completa da rede mesh de sensores IMx-1.
-
+Próximo passo: Analisar a alternância entre senhas para requests da API.
 ---
 
 ## Sumário
