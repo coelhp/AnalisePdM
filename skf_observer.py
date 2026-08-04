@@ -25,7 +25,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# CSS GLOBAL — Tema Corporativo
+# CSS GLOBAL — Tema Corporativo Claro (LDC)
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -1608,7 +1608,7 @@ with st.sidebar:
     <div style="padding:16px 0 8px;">
         <div style="font-family:'Rajdhani',sans-serif;font-size:1.4rem;font-weight:700;
                     letter-spacing:3px;text-transform:uppercase;color:#e6edf3;">
-            ⚙ SKF Observer
+            ⚙ Sistema Preditivo LDC - Monitoramento Online SKF
         </div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:0.68rem;
                     color:#00d9ff;letter-spacing:2px;">PHOENIX API v2.0</div>
@@ -1729,7 +1729,7 @@ st.markdown("""
 <div class="top-banner">
     <div class="logo-box">⚙</div>
     <div>
-        <h1>SKF Observer Phoenix</h1>
+        <h1>Monitoramento Online - LDC | SKF Observer</h1>
         <div class="sub">Sistema de Monitoramento de Pontos Rotativos</div>
     </div>
 </div>
