@@ -1,11 +1,12 @@
 """
 SKF Observer Phoenix — Dashboard de Monitoramento
 ==================================================
-App Streamlit para consulta e visualização de dados de monitoramento preditivo.
+Streamlit app para consulta e visualização de dados de tendência.
 """
 
 import streamlit as st
 import requests
+import re
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -16,14 +17,14 @@ import numpy as np
 # PAGE CONFIG
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="SKF Observer - Data Exlplorer",
+    page_title="SKF Observer Phoenix",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ─────────────────────────────────────────────
-# CSS GLOBAL — LDC Brand Theme
+# CSS GLOBAL — Tema Corporativo Claro (LDC)
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -254,8 +255,8 @@ for key, default in {
     "fleet_log":      [],
     "base_url":       "http://services.repcenter.skf.com",
     "selected_unit":  None,
-    "username":       "USER",
-    "_password":      "PASSWORD",
+    "username":       "patrick.coelho",
+    "_password":      "",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -298,15 +299,15 @@ def build_asset_index(assets_list: list) -> dict:
 
     Hierarquia completa (5 níveis — Área presente = "Moagem"):
         Unidade / Área(Moagem) / Setor / Equipamento / Ativo
-        ex: "FÁBRICA 1 / Moagem / Preparação / 13SR / Redutor"
+        ex: "LDC_ALTO_ARAGUAIA / Moagem / Preparação / 13SR / Redutor"
 
     Hierarquia reduzida (4 níveis — sem Área):
         Unidade / Setor / Equipamento / Ativo
-        ex: "FÁBRICA 2 / Extração / 07SR / Motor"
+        ex: "LDC_PONTA_GROSSA / Extração / 07SR / Motor"
 
     Hierarquia mínima (3 níveis — sem Área e sem Ativo):
         Unidade / Setor / Equipamento
-        ex: "FÁBRICA 3 / Preparação / 22SR"
+        ex: "LDC_JATAI / Preparação / 22SR"
 
     Regra de detecção de Área: o nível 1 é Área SOMENTE se seu valor
     for exatamente "Moagem" (case-insensitive). Qualquer outro valor
@@ -315,7 +316,7 @@ def build_asset_index(assets_list: list) -> dict:
     Separadores suportados: / \\ > |
     Campos ausentes ficam como "—".
     """
-    import re as _re
+    # re já importado no módulo
 
     def _is_area(text: str) -> bool:
         """Área é identificada exclusivamente pelo valor 'Moagem'."""
@@ -329,7 +330,7 @@ def build_asset_index(assets_list: list) -> dict:
         path = a.get("Path") or a.get("path") or ""
         desc = a.get("Description") or a.get("description") or ""
 
-        parts = [p.strip() for p in _re.split(r"[/\\>|]", path) if p.strip()]
+        parts = [p.strip() for p in re.split(r"[/\\>|]", path) if p.strip()]
         n = len(parts)
 
         unidade = parts[0] if n > 0 else "—"
@@ -1150,55 +1151,35 @@ def run_fleet_scan(base_url: str, username: str, password: str,
     log("🔑 Token obtido.")
     prog(0.05, "Autenticado")
 
-    # ── Índice de localização ──────────────────────────────────────
-    # Estratégia: carrega assets (1 chamada) + points por asset (N chamadas leves)
-    # para montar {IDNode → localização}. Feito uma vez, reaproveitado nos sensores.
-    asset_idx:    dict[int, dict] = {}
-    node_to_loc:  dict[int, dict] = {}
-    try:
-        assets_list = get_assets(base_url, token)
-        asset_idx   = build_asset_index(assets_list)
-        log(f"  ✓ {len(asset_idx)} asset(s) indexado(s).")
-        prog(0.08, "Assets indexados")
 
-        token = _ensure_token(base_url, username, password)
-        for a in assets_list:
-            mid = a.get("ID") or a.get("id")
-            if mid is None:
-                continue
-            mid_int = int(mid)
-            if mid_int not in asset_idx:
-                continue
-            try:
-                # Usa /v2/points (mais leve que /v1/machines/{id}/points)
-                resp_pts = requests.get(
-                    f"{base_url}/v2/points",
-                    headers={"Authorization": f"Bearer {token}",
-                             "Accept": "application/json"},
-                    params={"machine_id": mid},
-                    timeout=15,
-                )
-                pts = resp_pts.json() if resp_pts.status_code == 200 else []
-                pts = pts if isinstance(pts, list) else pts.get("value", [])
-            except Exception:
-                pts = []
+    # ── Função de parse do campo Location do nextgensensor ────────────
+    # Location segue a mesma hierarquia do Path de assets, mas com
+    # separador "\" e podendo incluir o nome do sensor no último nível:
+    #   "LDC ALTO ARAGUAIA\MOAGEM\EXTRAÇÃO\VENTILADOR-136\136 Motor\WS01H\"
+    #    [0] Unidade  [1] Área  [2] Setor  [3] Equipamento [4] Ativo [5] Sensor
+    # Regra de Área: nível 1 == "MOAGEM" (case-insensitive).
+    def _parse_location(loc: str) -> dict:
+        parts = [p.strip() for p in re.split(r"[/\\|>]", loc or "") if p.strip()]
+        n = len(parts)
+        unidade = parts[0] if n > 0 else "—"
+        def _is_area(t): return t.lower() == "moagem"
+        if n >= 5:
+            area, setor = (parts[1], parts[2]) if _is_area(parts[1]) else ("—", parts[1])
+            offset = 1 if _is_area(parts[1]) else 0
+            equipamento = parts[2 + offset] if n > 2 + offset else "—"
+            ativo       = parts[3 + offset] if n > 3 + offset else "—"
+        elif n == 4:
+            if _is_area(parts[1]):
+                area, setor, equipamento, ativo = parts[1], parts[2], parts[3], "—"
+            else:
+                area, setor, equipamento, ativo = "—", parts[1], parts[2], parts[3]
+        elif n == 3:
+            area, setor, equipamento, ativo = "—", parts[1], parts[2], "—"
+        else:
+            area, setor, equipamento, ativo = "—", parts[1] if n > 1 else "—", "—", "—"
+        return {"Unidade": unidade, "Area": area, "Setor": setor,
+                "Equipamento": equipamento, "Ativo": ativo}
 
-            for p in pts:
-                # ParentID em /v2/points é o IDNode do sensor físico
-                nid = p.get("ParentID") or p.get("parentId")
-                try:
-                    nid = int(nid)
-                except (TypeError, ValueError):
-                    nid = None
-                if nid is not None:
-                    node_to_loc[nid] = asset_idx[mid_int]
-
-            time.sleep(0.05)   # delay leve entre assets
-
-        log(f"  ✓ Localização mapeada para {len(node_to_loc)} IDNode(s).")
-    except Exception as e:
-        log(f"  ⚠ Índice de localização indisponível: {e}")
-    prog(0.18, "Localização mapeada")
 
     # ── 2. Gateways ───────────────────────────────────────────────
     log("📡 Coletando gateways…")
@@ -1299,18 +1280,16 @@ def run_fleet_scan(base_url: str, username: str, password: str,
                 "DiagnosticCode":    diag_code,
                 "DiagFlags":         ", ".join(diag_flags) if diag_flags else "—",
                 "AlertLevel":        alert_level,
-                # Localização: cruza pelo IDNode → node_to_loc (construído dos points)
-                **{k: node_to_loc.get(
-                        int(s.get("IDNode") or s.get("idNode") or 0),
-                        {}
-                    ).get(k, "—")
-                   for k in ("Unidade", "Area", "Setor", "Equipamento", "Ativo")},
+                # Localização: parse direto do campo Location do nextgensensor
+                **_parse_location(s.get("Location") or s.get("location") or ""),
             })
 
         result["sensors"] = pd.DataFrame(sensor_rows)
         log(f"  ✓ {len(sensor_rows)} sensor(es) sem fio encontrado(s).")
     except Exception as e:
+        import traceback
         log(f"  ⚠ Erro em /v1/nextgensensor: {e}")
+        log(f"  Traceback: {traceback.format_exc()}")
         result["sensors"] = pd.DataFrame()
     prog(0.50, "Sensores sem fio coletados")
     time.sleep(0.2)
@@ -1632,7 +1611,7 @@ with st.sidebar:
             ⚙ SKF Observer
         </div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:0.68rem;
-                    color:#00d9ff;letter-spacing:2px;">PHOENIX API v2.0</div>
+                    color:#1E3A4C;letter-spacing:2px;">PHOENIX API v2.0</div>
     </div>
     <hr style="border-color:#21262d;margin:8px 0 20px 0;">
     """, unsafe_allow_html=True)
@@ -1643,6 +1622,7 @@ with st.sidebar:
         "Jataí":              ("21226", "http://services.repcenter.skf.com:21226"),
         "Paraguaçu Paulista": ("21246", "http://services.repcenter.skf.com:21246"),
         "Ponta Grossa":       ("21241", "http://services.repcenter.skf.com:21241"),
+        "Paranaguá":          ("22001", "http://services.repcenter.skf.com:22001"),    
     }
 
     st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
@@ -1917,7 +1897,7 @@ with tab_monitor:
                 <td><span class="id-chip">{pid}</span></td>
                 <td><strong>{pname}</strong></td>
                 <td style="font-size:0.82rem;color:#8b949e;">{ptype}</td>
-                <td style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:#00d9ff;">{unit}</td>
+                <td style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;color:#1E3A4C;">{unit}</td>
             </tr>"""
  
         st.markdown(f"""
@@ -2099,7 +2079,7 @@ with tab_monitor:
             fig.add_trace(go.Scatter(
                 x=df["timestamp"], y=df["value"],
                 fill="tozeroy",
-                fillcolor="rgba(50,85,110,0.08)",
+                fillcolor="rgba(30,58,76,0.05)",
                 line=dict(color="rgba(0,0,0,0)"),
                 showlegend=False, hoverinfo="skip",
             ))
@@ -2112,7 +2092,7 @@ with tab_monitor:
                     pd.Series([media - desvio] * len(df))[::-1],
                 ]),
                 fill="toself",
-                fillcolor="rgba(78,157,45,0.07)",
+                fillcolor="rgba(46,125,50,0.08)",
                 line=dict(color="rgba(0,0,0,0)"),
                 name="±1σ (normal)",
                 hoverinfo="skip",
@@ -2123,8 +2103,8 @@ with tab_monitor:
                 x=df["timestamp"], y=df["value"],
                 mode="lines+markers",
                 name=f"{ch_title}",
-                line=dict(color="#A7C5E2", width=2),
-                marker=dict(size=5, color="#A7C5E2", opacity=0.8),
+                line=dict(color="#1E3A4C", width=2),
+                marker=dict(size=5, color="#1E3A4C", opacity=0.8),
                 hovertemplate=(
                     "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>"
                     f"<b>{ch_title}:</b> %{{y:.4f}} {unit}<extra></extra>"
@@ -2137,55 +2117,55 @@ with tab_monitor:
                     x=df["timestamp"], y=df["speed"],
                     mode="lines",
                     name="Velocidade (RPM)",
-                    line=dict(color="#5E699E", width=1, dash="dot"),
+                    line=dict(color="#5C6C8A", width=1, dash="dot"),
                     yaxis="y2",
                     hovertemplate="<b>Velocidade:</b> %{y:.1f} RPM<extra></extra>",
                     opacity=0.7,
                 ))
  
             # Linhas de referência
-            fig.add_hline(y=media, line=dict(color="#4E9D2D", width=1.5, dash="dash"),
-                          annotation_text=f"Média  {media:.4f}", annotation_font_color="#4E9D2D",
+            fig.add_hline(y=media, line=dict(color="#2E7D32", width=1.5, dash="dash"),
+                          annotation_text=f"Média  {media:.4f}", annotation_font_color="#2E7D32",
                           annotation_position="top right")
-            fig.add_hline(y=l_alert, line=dict(color="#BA944B", width=1.2, dash="dot"),
-                          annotation_text=f"Alerta  {l_alert:.4f}", annotation_font_color="#BA944B",
+            fig.add_hline(y=l_alert, line=dict(color="#E65100", width=1.2, dash="dot"),
+                          annotation_text=f"Alerta  {l_alert:.4f}", annotation_font_color="#E65100",
                           annotation_position="top right")
-            fig.add_hline(y=l_alarm, line=dict(color="#F06A22", width=1.2, dash="dot"),
-                          annotation_text=f"Alarme  {l_alarm:.4f}", annotation_font_color="#F06A22",
+            fig.add_hline(y=l_alarm, line=dict(color="#C0392B", width=1.2, dash="dot"),
+                          annotation_text=f"Alarme  {l_alarm:.4f}", annotation_font_color="#C0392B",
                           annotation_position="top right")
  
             layout_extra = {}
             if has_speed:
                 layout_extra["yaxis2"] = dict(
-                    title=dict(text="Velocidade [RPM]", font=dict(color="#5E699E", size=10)),
+                    title=dict(text="Velocidade [RPM]", font=dict(color="#5C6C8A", size=10)),
                     overlaying="y", side="right",
                     gridcolor="rgba(0,0,0,0)",
-                    tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#5E699E"),
+                    tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#5C6C8A"),
                 )
  
             fig.update_layout(
-                paper_bgcolor="#0e1820",
-                plot_bgcolor="#162130",
-                font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                paper_bgcolor="#F0F3F6",
+                plot_bgcolor="#FFFFFF",
+                font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                 title=dict(
-                    text=f"<b>{pname}</b>  ·  {asset['Name']}  ·  <span style='color:#00d9ff'>{ch_title}</span>",
-                    font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                    text=f"<b>{pname}</b>  ·  {asset['Name']}  ·  <span style='color:#1E3A4C'>{ch_title}</span>",
+                    font=dict(family="Rajdhani, sans-serif", size=18, color="#1A2530"),
                     x=0.01,
                 ),
                 xaxis=dict(
-                    gridcolor="#2a3f52", zeroline=False,
-                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                    title=dict(text="Data / Hora (UTC)", font=dict(color="#98C0B8", size=11)),
-                    rangeslider=dict(visible=True, bgcolor="#162130", thickness=0.06),
+                    gridcolor="#D0D8E0", zeroline=False,
+                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                    title=dict(text="Data / Hora (UTC)", font=dict(color="#5C6670", size=11)),
+                    rangeslider=dict(visible=True, bgcolor="#FFFFFF", thickness=0.06),
                 ),
                 yaxis=dict(
-                    gridcolor="#2a3f52", zeroline=False,
-                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                    title=dict(text=f"{ch_title}  [{unit}]", font=dict(color="#98C0B8", size=11)),
+                    gridcolor="#D0D8E0", zeroline=False,
+                    tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                    title=dict(text=f"{ch_title}  [{unit}]", font=dict(color="#5C6670", size=11)),
                 ),
                 legend=dict(
-                    bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
-                    font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                    bgcolor="rgba(13,17,23,0.8)", bordercolor="#D0D8E0", borderwidth=1,
+                    font=dict(family="Exo 2, sans-serif", size=11, color="#1E3A4C"),
                     orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
                 ),
                 hovermode="x unified",
@@ -2307,7 +2287,7 @@ with tab_monitor:
         fig_spec.add_trace(go.Scatter(
             x=freqs, y=values,
             fill="tozeroy",
-            fillcolor="rgba(50,85,110,0.10)",
+            fillcolor="rgba(30,58,76,0.07)",
             line=dict(color="rgba(0,0,0,0)"),
             showlegend=False, hoverinfo="skip",
         ))
@@ -2317,7 +2297,7 @@ with tab_monitor:
             x=freqs, y=values,
             mode="lines",
             name=f"Espectro [{dir_str}]",
-            line=dict(color="#A7C5E2", width=1.5),
+            line=dict(color="#1E3A4C", width=1.5),
             hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.4f} " + eu + "<extra></extra>",
         ))
  
@@ -2326,11 +2306,11 @@ with tab_monitor:
             x=peak_freqs, y=peak_vals,
             mode="markers+text",
             name="Picos",
-            marker=dict(size=8, color="#BA944B", symbol="triangle-up",
-                        line=dict(color="#BA944B", width=1)),
+            marker=dict(size=8, color="#E65100", symbol="triangle-up",
+                        line=dict(color="#E65100", width=1)),
             text=[f"{f:.1f}" for f in peak_freqs],
             textposition="top center",
-            textfont=dict(family="Share Tech Mono, monospace", size=9, color="#BA944B"),
+            textfont=dict(family="Share Tech Mono, monospace", size=9, color="#E65100"),
             hovertemplate="<b>%{x:.2f} Hz</b><br>%{y:.5f} " + eu + "<extra>Pico</extra>",
         ))
  
@@ -2340,35 +2320,35 @@ with tab_monitor:
                 x=hf,
                 line=dict(color="rgba(94,105,158,0.6)", width=1, dash="dot"),
                 annotation_text=hlabel,
-                annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#5E699E"),
+                annotation_font=dict(family="Share Tech Mono, monospace", size=9, color="#5C6C8A"),
                 annotation_position="top",
             )
  
         fig_spec.update_layout(
-            paper_bgcolor="#0e1820",
-            plot_bgcolor="#162130",
-            font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+            paper_bgcolor="#F0F3F6",
+            plot_bgcolor="#FFFFFF",
+            font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
             title=dict(
                 text=(f"<b>{pname}</b>  ·  Espectro  ·  "
-                      f"<span style='color:#00d9ff'>Direção {dir_str}</span>  ·  "
+                      f"<span style='color:#1E3A4C'>Direção {dir_str}</span>  ·  "
                       f"<span style='color:#8b949e'>{eu}</span>"),
-                font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                font=dict(family="Rajdhani, sans-serif", size=18, color="#1A2530"),
                 x=0.01,
             ),
             xaxis=dict(
-                gridcolor="#2a3f52", zeroline=False,
-                tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                title=dict(text="Frequência [Hz]", font=dict(color="#98C0B8", size=11)),
-                rangeslider=dict(visible=True, bgcolor="#162130", thickness=0.06),
+                gridcolor="#D0D8E0", zeroline=False,
+                tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                title=dict(text="Frequência [Hz]", font=dict(color="#5C6670", size=11)),
+                rangeslider=dict(visible=True, bgcolor="#FFFFFF", thickness=0.06),
             ),
             yaxis=dict(
-                gridcolor="#2a3f52", zeroline=False,
-                tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                title=dict(text=f"Amplitude  [{eu}]", font=dict(color="#98C0B8", size=11)),
+                gridcolor="#D0D8E0", zeroline=False,
+                tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                title=dict(text=f"Amplitude  [{eu}]", font=dict(color="#5C6670", size=11)),
             ),
             legend=dict(
-                bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
-                font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                bgcolor="rgba(13,17,23,0.8)", bordercolor="#D0D8E0", borderwidth=1,
+                font=dict(family="Exo 2, sans-serif", size=11, color="#1E3A4C"),
                 orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
             ),
             hovermode="x",
@@ -2556,8 +2536,8 @@ with tab_imx:
                     name="Sensores comissionados",
                     marker=dict(
                         color=contagem_mes["qtd"],
-                        colorscale=[[0, "rgba(0,217,255,0.4)"], [1, "#A7C5E2"]],
-                        line=dict(color="#A7C5E2", width=0.5),
+                        colorscale=[[0, "rgba(0,217,255,0.4)"], [1, "#1E3A4C"]],
+                        line=dict(color="#1E3A4C", width=0.5),
                     ),
                     hovertemplate="<b>%{x|%b/%Y}</b><br>%{y} sensor(es)<extra></extra>",
                 ))
@@ -2569,40 +2549,40 @@ with tab_imx:
                     y=contagem_mes["acumulado"],
                     mode="lines+markers",
                     name="Acumulado",
-                    line=dict(color="#4E9D2D", width=2, dash="dot"),
-                    marker=dict(size=6, color="#4E9D2D"),
+                    line=dict(color="#2E7D32", width=2, dash="dot"),
+                    marker=dict(size=6, color="#2E7D32"),
                     yaxis="y2",
                     hovertemplate="<b>%{x|%b/%Y}</b><br>Acumulado: %{y}<extra></extra>",
                 ))
 
                 fig_timeline.update_layout(
-                    paper_bgcolor="#0e1820",
-                    plot_bgcolor="#162130",
-                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    paper_bgcolor="#F0F3F6",
+                    plot_bgcolor="#FFFFFF",
+                    font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                     title=dict(
                         text="<b>Comissionamento IMx-1</b>  ·  Sensores por Mês",
-                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#1A2530"),
                         x=0.01,
                     ),
                     xaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False,
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Mês de Comissionamento", font=dict(color="#98C0B8", size=11)),
+                        gridcolor="#D0D8E0", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Mês de Comissionamento", font=dict(color="#5C6670", size=11)),
                     ),
                     yaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False,
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Qtd. Sensores / Mês", font=dict(color="#98C0B8", size=11)),
+                        gridcolor="#D0D8E0", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Qtd. Sensores / Mês", font=dict(color="#5C6670", size=11)),
                     ),
                     yaxis2=dict(
-                        title=dict(text="Acumulado", font=dict(color="#4E9D2D", size=10)),
+                        title=dict(text="Acumulado", font=dict(color="#2E7D32", size=10)),
                         overlaying="y", side="right",
                         gridcolor="rgba(0,0,0,0)",
-                        tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#4E9D2D"),
+                        tickfont=dict(family="Share Tech Mono, monospace", size=9, color="#2E7D32"),
                     ),
                     legend=dict(
-                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
-                        font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#D0D8E0", borderwidth=1,
+                        font=dict(family="Exo 2, sans-serif", size=11, color="#1E3A4C"),
                         orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
                     ),
                     bargap=0.25,
@@ -2622,9 +2602,9 @@ with tab_imx:
 
                 # Colormap por nível de bateria
                 def _bat_color(b):
-                    if b >= 70:  return "#4E9D2D"
-                    if b >= 40:  return "#BA944B"
-                    return "#F06A22"
+                    if b >= 70:  return "#2E7D32"
+                    if b >= 40:  return "#E65100"
+                    return "#C0392B"
 
                 df_bat["_cor"] = df_bat["BatteryLevel"].apply(_bat_color)
                 df_bat["_tip"] = df_bat.apply(
@@ -2643,18 +2623,18 @@ with tab_imx:
 
                 # Zonas de alerta de fundo
                 max_dias = int(df_bat["DiasDeUso"].max() * 1.1) or 365
-                fig_bat.add_hrect(y0=0,  y1=40,  fillcolor="rgba(240,106,34,0.06)",
+                fig_bat.add_hrect(y0=0,  y1=40,  fillcolor="rgba(192,57,43,0.07)",
                                   line_width=0, annotation_text="⚠ Crítico",
                                   annotation_position="right",
-                                  annotation_font=dict(color="#F06A22", size=9))
-                fig_bat.add_hrect(y0=40, y1=70,  fillcolor="rgba(186,148,75,0.05)",
+                                  annotation_font=dict(color="#C0392B", size=9))
+                fig_bat.add_hrect(y0=40, y1=70,  fillcolor="rgba(230,81,0,0.05)",
                                   line_width=0, annotation_text="Atenção",
                                   annotation_position="right",
-                                  annotation_font=dict(color="#BA944B", size=9))
-                fig_bat.add_hrect(y0=70, y1=100, fillcolor="rgba(78,157,45,0.05)",
+                                  annotation_font=dict(color="#E65100", size=9))
+                fig_bat.add_hrect(y0=70, y1=100, fillcolor="rgba(46,125,50,0.06)",
                                   line_width=0, annotation_text="Normal",
                                   annotation_position="right",
-                                  annotation_font=dict(color="#4E9D2D", size=9))
+                                  annotation_font=dict(color="#2E7D32", size=9))
 
                 fig_bat.add_trace(go.Scatter(
                     x=df_bat["DiasDeUso"],
@@ -2694,28 +2674,28 @@ with tab_imx:
                     ))
 
                 fig_bat.update_layout(
-                    paper_bgcolor="#0e1820",
-                    plot_bgcolor="#162130",
-                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    paper_bgcolor="#F0F3F6",
+                    plot_bgcolor="#FFFFFF",
+                    font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                     title=dict(
                         text="<b>Bateria Residual vs. Dias em Campo</b>",
-                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#1A2530"),
                         x=0.01,
                     ),
                     xaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False,
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Dias em Campo (desde 1ª medição)", font=dict(color="#98C0B8", size=11)),
+                        gridcolor="#D0D8E0", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Dias em Campo (desde 1ª medição)", font=dict(color="#5C6670", size=11)),
                     ),
                     yaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False,
+                        gridcolor="#D0D8E0", zeroline=False,
                         range=[0, 105],
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Bateria Residual [%]", font=dict(color="#98C0B8", size=11)),
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Bateria Residual [%]", font=dict(color="#5C6670", size=11)),
                     ),
                     legend=dict(
-                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#2a3f52", borderwidth=1,
-                        font=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                        bgcolor="rgba(13,17,23,0.8)", bordercolor="#D0D8E0", borderwidth=1,
+                        font=dict(family="Exo 2, sans-serif", size=11, color="#1E3A4C"),
                         orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
                     ),
                     hovermode="closest",
@@ -2735,9 +2715,9 @@ with tab_imx:
                             unsafe_allow_html=True)
 
                 bar_colors = [
-                    "#F06A22" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.75)
-                    else "#BA944B" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.40)
-                    else "#4E9D2D"
+                    "#C0392B" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.75)
+                    else "#E65100" if v >= df_taxa["TaxaConsumoBateria"].quantile(0.40)
+                    else "#2E7D32"
                     for v in df_taxa["TaxaConsumoBateria"]
                 ]
 
@@ -2760,22 +2740,22 @@ with tab_imx:
                 ))
 
                 fig_taxa.update_layout(
-                    paper_bgcolor="#0e1820",
-                    plot_bgcolor="#162130",
-                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    paper_bgcolor="#F0F3F6",
+                    plot_bgcolor="#FFFFFF",
+                    font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                     title=dict(
                         text="<b>Taxa de Consumo de Bateria</b>  ·  % consumida por dia",
-                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#1A2530"),
                         x=0.01,
                     ),
                     xaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False,
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Taxa de Consumo [%/dia]", font=dict(color="#98C0B8", size=11)),
+                        gridcolor="#D0D8E0", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Taxa de Consumo [%/dia]", font=dict(color="#5C6670", size=11)),
                     ),
                     yaxis=dict(
                         gridcolor="rgba(0,0,0,0)",
-                        tickfont=dict(family="Exo 2, sans-serif", size=10, color="#A7C5E2"),
+                        tickfont=dict(family="Exo 2, sans-serif", size=10, color="#1E3A4C"),
                     ),
                     hovermode="y",
                     margin=dict(l=200, r=40, t=70, b=60),
@@ -3040,18 +3020,18 @@ with tab_fleet:
                     labels=["Online", "Offline"],
                     values=[n_gw_online, n_gw_offline],
                     hole=0.62,
-                    marker=dict(colors=["#4E9D2D", "#F06A22"],
-                                line=dict(color="#0e1820", width=3)),
+                    marker=dict(colors=["#2E7D32", "#C0392B"],
+                                line=dict(color="#F0F3F6", width=3)),
                     textinfo="percent+label",
-                    textfont=dict(family="Exo 2, sans-serif", size=12, color="#EEF4F9"),
+                    textfont=dict(family="Exo 2, sans-serif", size=12, color="#1A2530"),
                     hovertemplate="<b>%{label}</b><br>%{value} gateway(s)<extra></extra>",
                 ))
                 fig_pie.update_layout(
-                    paper_bgcolor="#0e1820",
-                    plot_bgcolor="#0e1820",
-                    font=dict(family="Exo 2, sans-serif", color="#98C0B8"),
+                    paper_bgcolor="#F0F3F6",
+                    plot_bgcolor="#F0F3F6",
+                    font=dict(family="Exo 2, sans-serif", color="#5C6670"),
                     title=dict(text="<b>Gateways</b>",
-                               font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                               font=dict(family="Rajdhani, sans-serif", size=16, color="#1A2530"),
                                x=0.5),
                     showlegend=False,
                     margin=dict(l=10, r=10, t=50, b=10),
@@ -3059,7 +3039,7 @@ with tab_fleet:
                     annotations=[dict(
                         text=f"<b>{pct_online:.0f}%</b><br>online",
                         x=0.5, y=0.5, font_size=16,
-                        font=dict(family="Rajdhani, sans-serif", color="#A7C5E2"),
+                        font=dict(family="Rajdhani, sans-serif", color="#1E3A4C"),
                         showarrow=False,
                     )],
                 )
@@ -3071,12 +3051,12 @@ with tab_fleet:
                     cs_counts = df_sens["ConnectionState"].value_counts().reset_index()
                     cs_counts.columns = ["Estado", "Qtd"]
                     color_map = {
-                        "Conectado":              "#4E9D2D",
-                        "Desconectado":           "#F06A22",
-                        "Sem Medição":            "#BA944B",
+                        "Conectado":              "#2E7D32",
+                        "Desconectado":           "#C0392B",
+                        "Sem Medição":            "#E65100",
                         "Conectado — Sem Medição": "#708EB4",
                     }
-                    bar_colors = [color_map.get(s, "#BA944B") for s in cs_counts["Estado"]]
+                    bar_colors = [color_map.get(s, "#E65100") for s in cs_counts["Estado"]]
 
                     fig_cs = go.Figure(go.Bar(
                         x=cs_counts["Estado"],
@@ -3086,17 +3066,17 @@ with tab_fleet:
                         hovertemplate="<b>%{x}</b><br>%{y} sensor(es)<extra></extra>",
                     ))
                     fig_cs.update_layout(
-                        paper_bgcolor="#0e1820",
-                        plot_bgcolor="#162130",
-                        font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                        paper_bgcolor="#F0F3F6",
+                        plot_bgcolor="#FFFFFF",
+                        font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                         title=dict(text="<b>Estado de Conexão dos Sensores</b>",
-                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#1A2530"),
                                    x=0.01),
-                        xaxis=dict(gridcolor="#2a3f52",
-                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
-                        yaxis=dict(gridcolor="#2a3f52", zeroline=False,
-                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                                   title=dict(text="Sensores", font=dict(color="#98C0B8", size=10))),
+                        xaxis=dict(gridcolor="#D0D8E0",
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670")),
+                        yaxis=dict(gridcolor="#D0D8E0", zeroline=False,
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                                   title=dict(text="Sensores", font=dict(color="#5C6670", size=10))),
                         margin=dict(l=50, r=20, t=50, b=40),
                         height=260,
                     )
@@ -3107,8 +3087,8 @@ with tab_fleet:
                 df_mesh = df_sens.dropna(subset=["BatteryLevel"]).copy()
                 df_mesh["DiasOffline"] = df_mesh["DiasOffline"].fillna(0)
 
-                ALERT_COLORS = {"ok": "#4E9D2D", "warn": "#BA944B", "danger": "#F06A22"}
-                mesh_colors  = [ALERT_COLORS.get(a, "#98C0B8") for a in df_mesh.get("AlertLevel", [])]
+                ALERT_COLORS = {"ok": "#2E7D32", "warn": "#E65100", "danger": "#C0392B"}
+                mesh_colors  = [ALERT_COLORS.get(a, "#5C6670") for a in df_mesh.get("AlertLevel", [])]
 
                 # Ícone de bateria no texto
                 def _bat_icon(b):
@@ -3120,9 +3100,9 @@ with tab_fleet:
                 fig_mesh = go.Figure()
 
                 # Zonas de fundo
-                fig_mesh.add_hrect(y0=0,   y1=20,  fillcolor="rgba(240,106,34,0.08)",  line_width=0)
-                fig_mesh.add_hrect(y0=20,  y1=40,  fillcolor="rgba(186,148,75,0.05)",  line_width=0)
-                fig_mesh.add_hrect(y0=40,  y1=100, fillcolor="rgba(78,157,45,0.05)", line_width=0)
+                fig_mesh.add_hrect(y0=0,   y1=20,  fillcolor="rgba(192,57,43,0.08)",  line_width=0)
+                fig_mesh.add_hrect(y0=20,  y1=40,  fillcolor="rgba(230,81,0,0.05)",  line_width=0)
+                fig_mesh.add_hrect(y0=40,  y1=100, fillcolor="rgba(46,125,50,0.06)", line_width=0)
 
                 fig_mesh.add_trace(go.Scatter(
                     x=df_mesh["DiasOffline"],
@@ -3154,30 +3134,30 @@ with tab_fleet:
                 # Linhas de referência
                 fig_mesh.add_vline(x=2, line=dict(color="rgba(255,71,87,0.4)", width=1, dash="dot"),
                                    annotation_text="2 dias offline",
-                                   annotation_font=dict(color="#F06A22", size=9))
+                                   annotation_font=dict(color="#C0392B", size=9))
                 fig_mesh.add_hline(y=20, line=dict(color="rgba(255,71,87,0.4)", width=1, dash="dot"),
                                    annotation_text="Bateria crítica 20%",
-                                   annotation_font=dict(color="#F06A22", size=9),
+                                   annotation_font=dict(color="#C0392B", size=9),
                                    annotation_position="bottom right")
 
                 fig_mesh.update_layout(
-                    paper_bgcolor="#0e1820",
-                    plot_bgcolor="#162130",
-                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    paper_bgcolor="#F0F3F6",
+                    plot_bgcolor="#FFFFFF",
+                    font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                     title=dict(
                         text="<b>Saúde da Rede Mesh</b>  ·  Bateria × Dias sem Atualização",
-                        font=dict(family="Rajdhani, sans-serif", size=18, color="#EEF4F9"),
+                        font=dict(family="Rajdhani, sans-serif", size=18, color="#1A2530"),
                         x=0.01,
                     ),
                     xaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False,
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Dias sem Atualização de Status", font=dict(color="#98C0B8", size=11)),
+                        gridcolor="#D0D8E0", zeroline=False,
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Dias sem Atualização de Status", font=dict(color="#5C6670", size=11)),
                     ),
                     yaxis=dict(
-                        gridcolor="#2a3f52", zeroline=False, range=[0, 105],
-                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                        title=dict(text="Nível de Bateria [%]", font=dict(color="#98C0B8", size=11)),
+                        gridcolor="#D0D8E0", zeroline=False, range=[0, 105],
+                        tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                        title=dict(text="Nível de Bateria [%]", font=dict(color="#5C6670", size=11)),
                     ),
                     hovermode="closest",
                     margin=dict(l=60, r=40, t=70, b=60),
@@ -3188,7 +3168,7 @@ with tab_fleet:
         # ── Gauge de gateways (barras empilhadas por status) ─────────
         if not df_gw.empty and "Nome" in df_gw.columns and "Conectado" in df_gw.columns:
             df_gw_sorted = df_gw.sort_values("Conectado", ascending=True)
-            gw_colors    = ["#F06A22" if not c else "#4E9D2D" for c in df_gw_sorted["Conectado"]]
+            gw_colors    = ["#C0392B" if not c else "#2E7D32" for c in df_gw_sorted["Conectado"]]
 
             fig_gw = go.Figure(go.Bar(
                 x=[1] * len(df_gw_sorted),
@@ -3203,17 +3183,17 @@ with tab_fleet:
                 ),
                 text=df_gw_sorted["Status"],
                 textposition="inside",
-                textfont=dict(family="Share Tech Mono, monospace", size=10, color="#0e1820"),
+                textfont=dict(family="Share Tech Mono, monospace", size=10, color="#F0F3F6"),
             ))
             fig_gw.update_layout(
-                paper_bgcolor="#0e1820",
-                plot_bgcolor="#162130",
-                font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                paper_bgcolor="#F0F3F6",
+                plot_bgcolor="#FFFFFF",
+                font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                 title=dict(text="<b>Status Individual dos Gateways</b>",
-                           font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                           font=dict(family="Rajdhani, sans-serif", size=16, color="#1A2530"),
                            x=0.01),
                 xaxis=dict(visible=False),
-                yaxis=dict(tickfont=dict(family="Exo 2, sans-serif", size=11, color="#A7C5E2"),
+                yaxis=dict(tickfont=dict(family="Exo 2, sans-serif", size=11, color="#1E3A4C"),
                            gridcolor="rgba(0,0,0,0)"),
                 margin=dict(l=180, r=20, t=50, b=20),
                 height=max(200, len(df_gw_sorted) * 32 + 80),
@@ -3296,30 +3276,30 @@ with tab_fleet:
                         nbinsx=20,
                         marker=dict(
                             color=df_bat_hist.apply(
-                                lambda b: "#F06A22" if b < 20 else ("#BA944B" if b < 40 else "#4E9D2D")
+                                lambda b: "#C0392B" if b < 20 else ("#E65100" if b < 40 else "#2E7D32")
                             ),
-                            line=dict(color="#0e1820", width=0.5),
+                            line=dict(color="#F0F3F6", width=0.5),
                         ),
                         hovertemplate="Bateria: %{x:.0f}%<br>Sensores: %{y}<extra></extra>",
                     ))
-                    fig_bat_hist.add_vline(x=20, line=dict(color="#F06A22", width=1.5, dash="dot"),
+                    fig_bat_hist.add_vline(x=20, line=dict(color="#C0392B", width=1.5, dash="dot"),
                                           annotation_text="20% crítico",
-                                          annotation_font=dict(color="#F06A22", size=9))
-                    fig_bat_hist.add_vline(x=40, line=dict(color="#BA944B", width=1, dash="dot"),
+                                          annotation_font=dict(color="#C0392B", size=9))
+                    fig_bat_hist.add_vline(x=40, line=dict(color="#E65100", width=1, dash="dot"),
                                           annotation_text="40% aviso",
-                                          annotation_font=dict(color="#BA944B", size=9))
+                                          annotation_font=dict(color="#E65100", size=9))
                     fig_bat_hist.update_layout(
-                        paper_bgcolor="#0e1820", plot_bgcolor="#162130",
-                        font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                        paper_bgcolor="#F0F3F6", plot_bgcolor="#FFFFFF",
+                        font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                         title=dict(text="<b>Distribuição de Bateria — Sensores Sem Fio</b>",
-                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#1A2530"),
                                    x=0.01),
-                        xaxis=dict(gridcolor="#2a3f52",
-                                   title=dict(text="Nível de Bateria [%]", font=dict(color="#98C0B8")),
-                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
-                        yaxis=dict(gridcolor="#2a3f52", zeroline=False,
-                                   title=dict(text="Nº de Sensores", font=dict(color="#98C0B8")),
-                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
+                        xaxis=dict(gridcolor="#D0D8E0",
+                                   title=dict(text="Nível de Bateria [%]", font=dict(color="#5C6670")),
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670")),
+                        yaxis=dict(gridcolor="#D0D8E0", zeroline=False,
+                                   title=dict(text="Nº de Sensores", font=dict(color="#5C6670")),
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670")),
                         margin=dict(l=60, r=20, t=50, b=50),
                         height=300,
                     )
@@ -3341,13 +3321,13 @@ with tab_fleet:
                 sync_counts = df_dev["SyncStatus"].value_counts().reset_index()
                 sync_counts.columns = ["Status", "Qtd"]
                 SYNC_COLORS = {
-                    "Sincronizado":     "#4E9D2D",
-                    "Pendente":         "#BA944B",
-                    "Não Sincronizado": "#BA944B",
-                    "Falha":            "#F06A22",
-                    "Desconhecido":     "#98C0B8",
+                    "Sincronizado":     "#2E7D32",
+                    "Pendente":         "#E65100",
+                    "Não Sincronizado": "#E65100",
+                    "Falha":            "#C0392B",
+                    "Desconhecido":     "#5C6670",
                 }
-                sync_bar_colors = [SYNC_COLORS.get(s, "#98C0B8") for s in sync_counts["Status"]]
+                sync_bar_colors = [SYNC_COLORS.get(s, "#5C6670") for s in sync_counts["Status"]]
 
                 fig_sync = go.Figure(go.Bar(
                     x=sync_counts["Status"],
@@ -3357,19 +3337,19 @@ with tab_fleet:
                     hovertemplate="<b>%{x}</b><br>%{y} dispositivo(s)<extra></extra>",
                     text=sync_counts["Qtd"],
                     textposition="outside",
-                    textfont=dict(family="Share Tech Mono, monospace", size=11, color="#EEF4F9"),
+                    textfont=dict(family="Share Tech Mono, monospace", size=11, color="#1A2530"),
                 ))
                 fig_sync.update_layout(
-                    paper_bgcolor="#0e1820", plot_bgcolor="#162130",
-                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    paper_bgcolor="#F0F3F6", plot_bgcolor="#FFFFFF",
+                    font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                     title=dict(text="<b>Status de Sincronização — Dispositivos Cabeados</b>",
-                               font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                               font=dict(family="Rajdhani, sans-serif", size=16, color="#1A2530"),
                                x=0.01),
-                    xaxis=dict(gridcolor="#2a3f52",
-                               tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
-                    yaxis=dict(gridcolor="#2a3f52", zeroline=False,
-                               tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8"),
-                               title=dict(text="Qtd.", font=dict(color="#98C0B8", size=10))),
+                    xaxis=dict(gridcolor="#D0D8E0",
+                               tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670")),
+                    yaxis=dict(gridcolor="#D0D8E0", zeroline=False,
+                               tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670"),
+                               title=dict(text="Qtd.", font=dict(color="#5C6670", size=10))),
                     margin=dict(l=50, r=20, t=50, b=40),
                     height=280,
                 )
@@ -3412,21 +3392,21 @@ with tab_fleet:
                 if not df_sc_dias.empty:
                     fig_sc = go.Figure(go.Histogram(
                         x=df_sc_dias, nbinsx=15,
-                        marker=dict(color="#F06A22", line=dict(color="#0e1820", width=0.5)),
+                        marker=dict(color="#C0392B", line=dict(color="#F0F3F6", width=0.5)),
                         hovertemplate="Dias sem dados: %{x}<br>Itens: %{y}<extra></extra>",
                     ))
                     fig_sc.update_layout(
-                        paper_bgcolor="#0e1820", plot_bgcolor="#162130",
-                        font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                        paper_bgcolor="#F0F3F6", plot_bgcolor="#FFFFFF",
+                        font=dict(family="Exo 2, sans-serif", color="#5C6670", size=11),
                         title=dict(text="<b>Distribuição — Dias sem Dados Recebidos</b>",
-                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                                   font=dict(family="Rajdhani, sans-serif", size=16, color="#1A2530"),
                                    x=0.01),
-                        xaxis=dict(gridcolor="#2a3f52",
-                                   title=dict(text="Dias sem dados", font=dict(color="#98C0B8")),
-                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
-                        yaxis=dict(gridcolor="#2a3f52", zeroline=False,
-                                   title=dict(text="Nº Itens", font=dict(color="#98C0B8")),
-                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#98C0B8")),
+                        xaxis=dict(gridcolor="#D0D8E0",
+                                   title=dict(text="Dias sem dados", font=dict(color="#5C6670")),
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670")),
+                        yaxis=dict(gridcolor="#D0D8E0", zeroline=False,
+                                   title=dict(text="Nº Itens", font=dict(color="#5C6670")),
+                                   tickfont=dict(family="Share Tech Mono, monospace", size=10, color="#5C6670")),
                         margin=dict(l=60, r=20, t=50, b=50),
                         height=260,
                     )
