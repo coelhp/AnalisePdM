@@ -2809,13 +2809,19 @@ with tab_imx:
                 },
             )
 
-            # Exportação CSV
-            csv_imx = df_imx.to_csv(index=False).encode("utf-8")
+           # Exportação XLSX
+            output = BytesIO()
+
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df_imx.to_excel(writer, index=False, sheet_name="IMx-1")
+
+            output.seek(0)
+
             st.download_button(
-                "⬇  Exportar DataFrame IMx-1 (CSV)",
-                data=csv_imx,
-                file_name=f"imx1_comissionamento_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
+                "⬇ Exportar DataFrame IMx-1 (XLSX)",
+                data=output,
+                file_name=f"imx1_comissionamento_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
             )
 
