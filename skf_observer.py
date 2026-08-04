@@ -25,7 +25,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# CSS GLOBAL — Tema Corporativo Claro (LDC)
+# CSS GLOBAL — Tema Corporativo
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
