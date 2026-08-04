@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timezone, timedelta
 import numpy as np
+from io import BytesIO
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
