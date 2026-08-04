@@ -3305,11 +3305,21 @@ with tab_fleet:
                     )
                     st.plotly_chart(fig_bat_hist, use_container_width=True)
 
-                # Exportação
-                csv_sens = df_show_s.to_csv(index=False).encode("utf-8")
-                st.download_button("⬇  Exportar Sensores CSV", data=csv_sens,
-                                   file_name=f"fleet_sensors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                   mime="text/csv", key="dl_sens")
+                # Exportação XLSX
+                output_sens = BytesIO()
+
+                with pd.ExcelWriter(output_sens, engine="openpyxl") as writer:
+                    df_show_s.to_excel(writer, index=False, sheet_name="Sensores")
+
+                output_sens.seek(0)
+
+                st.download_button(
+                    "⬇ Exportar Sensores (XLSX)",
+                    data=output_sens,
+                    file_name=f"fleet_sensors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_sens",
+                )
 
         # ── Dispositivos cabeados ─────────────────────────────────
         with dtab_dev:
@@ -3373,10 +3383,21 @@ with tab_fleet:
                     },
                 )
 
-                csv_dev = df_dev.to_csv(index=False).encode("utf-8")
-                st.download_button("⬇  Exportar Dispositivos CSV", data=csv_dev,
-                                   file_name=f"fleet_devices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                   mime="text/csv", key="dl_dev")
+                # Exportação XLSX
+                output_dev = BytesIO()
+
+                with pd.ExcelWriter(output_dev, engine="openpyxl") as writer:
+                    df_dev.to_excel(writer, index=False, sheet_name="Dispositivos")
+
+                output_dev.seek(0)
+
+                st.download_button(
+                    "⬇ Exportar Dispositivos (XLSX)",
+                    data=output_dev,
+                    file_name=f"fleet_devices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_dev",
+                )
 
         # ── System Check ──────────────────────────────────────────
         with dtab_sc:
@@ -3426,10 +3447,21 @@ with tab_fleet:
                     },
                 )
 
-                csv_sc = df_sc.to_csv(index=False).encode("utf-8")
-                st.download_button("⬇  Exportar System Check CSV", data=csv_sc,
-                                   file_name=f"fleet_syscheck_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                   mime="text/csv", key="dl_sc")
+                # Exportação XLSX
+                output_sc = BytesIO()
+
+                with pd.ExcelWriter(output_sc, engine="openpyxl") as writer:
+                    df_sc.to_excel(writer, index=False, sheet_name="System Check")
+
+                output_sc.seek(0)
+
+                st.download_button(
+                        "⬇ Exportar System Check (XLSX)",
+                        data=output_sc,
+                        file_name=f"fleet_syscheck_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_sc",
+                    )
 
         # ── Log da coleta ─────────────────────────────────────────
         if st.session_state.fleet_log:
