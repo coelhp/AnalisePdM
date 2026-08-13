@@ -1608,7 +1608,7 @@ with st.sidebar:
     <div style="padding:16px 0 8px;">
         <div style="font-family:'Rajdhani',sans-serif;font-size:1.4rem;font-weight:700;
                     letter-spacing:3px;text-transform:uppercase;color:#e6edf3;">
-            ⚙ Sistema Preditivo LDC - Monitoramento Online SKF
+            Preditiva LDC - Monitoramento Online
         </div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:0.68rem;
                     color:#00d9ff;letter-spacing:2px;">PHOENIX API v2.0</div>
@@ -2779,7 +2779,7 @@ with tab_imx:
                 )
             if "DiasDeUso" in df_show_imx.columns:
                 df_show_imx["DiasDeUso"] = df_show_imx["DiasDeUso"].apply(
-                    lambda x: f"{int(x)} dias" if x == x and x is not None else "—"
+                    lambda x: f"{int(x)}" if x == x and x is not None else "—"
                 )
 
             st.dataframe(
@@ -2804,7 +2804,7 @@ with tab_imx:
                     "DataClearedSensor":            st.column_config.TextColumn("ClearedDate Sensor"),
                     "ProvavelDataComissionamento":  st.column_config.TextColumn("✅ Comissionamento Efetivo"),
                     "FonteComissionamento":         st.column_config.TextColumn("Fonte"),
-                    "DiasDeUso":                    st.column_config.TextColumn("Dias em Campo"),
+                    "DiasDeUso":                    st.column_config.NumberColumn("Dias em Campo"),
                     "TaxaConsumoBateria":           st.column_config.TextColumn("Taxa Consumo Bat."),
                 },
             )
