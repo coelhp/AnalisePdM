@@ -258,6 +258,15 @@ for key, default in {
     "selected_unit":  None,
     "username":       "patrick.coelho",
     "_password":      "",
+    # Machine Viewer API
+    "mv_api_key":      "",
+    "mv_short_name":   "",
+    "mv_assets":       [],
+    "mv_selected_asset": None,
+    "mv_conditions":   None,
+    "mv_measurements": None,
+    "mv_workorders":   None,
+    "mv_alarms":       None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1603,6 +1612,152 @@ def run_imx_scan(base_url: str, username: str, password: str,
 # ─────────────────────────────────────────────
 # SIDEBAR — Conexão
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# MACHINE VIEWER API — HELPERS
+# ─────────────────────────────────────────────
+# Auth: API Key fixa no header x-api-key (sem expiração)
+# Base: https://analystapi.repcenter.skf.com/{shortName}/
+# Método: sempre POST com body {"expression": "...GraphQL..."}
+
+MV_BASE = "https://analystapi.repcenter.skf.com"
+
+
+def mv_headers() -> dict:
+    return {
+        "x-api-key":    st.session_state.mv_api_key,
+        "Content-Type": "application/json",
+        "Accept":       "application/json",
+    }
+
+
+def mv_post(endpoint: str, expression: str) -> dict | None:
+    """POST genérico para a Machine Viewer API."""
+    short = st.session_state.mv_short_name.strip()
+    url   = f"{MV_BASE}/{short}/{endpoint}"
+    try:
+        resp = requests.post(
+            url,
+            headers=mv_headers(),
+            json={"expression": expression},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Machine Viewer — HTTP {e.response.status_code} em /{endpoint}: {e.response.text[:200]}")
+        return None
+    except Exception as e:
+        st.error(f"Machine Viewer — Erro em /{endpoint}: {e}")
+        return None
+
+
+def mv_get_assets() -> list:
+    """POST /assets — lista todos os ativos."""
+    expression = (
+        "{filter{"
+        "assetId assetName assetDescription functionalLocation "
+        "parentId parentName criticality assetStatus assetSegment conditionIndex"
+        "} }"
+    )
+    data = mv_post("assets", expression)
+    if data is None:
+        return []
+    return data.get("data", [])
+
+
+def mv_get_last_measurement(asset_id: int) -> list:
+    """POST /lastmeasurement — última medição de cada ponto do ativo."""
+    expression = (
+        f"{{filter (assetId: {asset_id}) "
+        "{assetId assetName pointId pointName channel unit pointStatus collectedDate overallValue}}"
+    )
+    data = mv_post("lastmeasurement", expression)
+    return data.get("data", []) if data else []
+
+
+def mv_get_measurements(asset_id: int, date_start: str, date_end: str) -> list:
+    """POST /measurements — histórico de medições no período."""
+    expression = (
+        f'{{filter(assetId: {asset_id}, '
+        f'collectedDateStart: "{date_start}", collectedDateEnd: "{date_end}") '
+        '{assetId assetName pointId pointName channel unit pointStatus collectedDate overallValue}}'
+    )
+    data = mv_post("measurements", expression)
+    return data.get("data", []) if data else []
+
+
+def mv_get_alarms(asset_id: int) -> list:
+    """POST /overall-alarm — limites de alarme configurados."""
+    expression = (
+        f"{{filter(assetId: {asset_id}) "
+        "{ assetId assetName pointId pointName unit alarmMethod "
+        "publicOrPrivateAlarm alertHigh alertLow dangerHigh dangerLow} }}"
+    )
+    data = mv_post("overall-alarm", expression)
+    return data.get("data", []) if data else []
+
+
+def mv_get_last_condition(asset_id: int) -> dict | None:
+    """POST /lastcondition — última condição de inspeção do ativo."""
+    expression = (
+        f"{{filter(assetId: {asset_id}) "
+        "{ assetId collectDate conditionDate conditionState inspectionType "
+        "trend technique globalValue globalValueUnity status diagnostic "
+        "observation author "
+        "workOrder{ id orderNumber deadline priority technique scheduledDate "
+        "openingDate reWork cmmsRegister cmms services situation author "
+        "intervention{ date interventionType description isDiagnosticCorrect} } } }}"
+    )
+    data = mv_post("lastcondition", expression)
+    items = data.get("data", []) if data else []
+    return items[0] if items else None
+
+
+def mv_get_conditions(asset_id: int, date_start: str, date_end: str) -> list:
+    """POST /conditions — histórico de condições no período."""
+    expression = (
+        f'{{filter(assetId: {asset_id}, '
+        f'collectedDateStart: "{date_start}", collectedDateEnd: "{date_end}") '
+        '{ assetId collectDate conditionDate conditionState inspectionType '
+        'trend technique globalValue globalValueUnity status diagnostic '
+        'observation author '
+        'workOrder{ id orderNumber deadline priority technique scheduledDate '
+        'openingDate reWork cmmsRegister cmms services situation author '
+        'intervention{ date interventionType description isDiagnosticCorrect} } } }}'
+    )
+    data = mv_post("conditions", expression)
+    return data.get("data", []) if data else []
+
+
+def mv_get_workorders(date_start: str, date_end: str) -> list:
+    """POST /workorders — ordens de serviço no período (sem filtro de asset)."""
+    expression = (
+        f'{{filter(openingDateStart: "{date_start}", openingDateEnd: "{date_end}") '
+        '{assetId id orderNumber deadline priority technique scheduledDate '
+        'openingDate reWork cmmsRegister cmms services situation author '
+        'intervention{ date interventionType description isDiagnosticCorrect} }}'
+    )
+    data = mv_post("workorders", expression)
+    return data.get("data", []) if data else []
+
+
+# Mapeamento de conditionState → cor semântica LDC
+MV_CONDITION_COLORS = {
+    "Normal":   "#4E9D2D",
+    "Alert":    "#BA944B",
+    "Danger":   "#F06A22",
+    "Critical": "#C0392B",
+    "Unknown":  "#5C6670",
+}
+
+MV_STATUS_BADGE = {
+    "Normal":   "badge-ok",
+    "Alert":    "badge-warn",
+    "Danger":   "badge-danger",
+    "Critical": "badge-danger",
+}
+
+
 with st.sidebar:
     st.markdown("""
     <div style="padding:16px 0 8px;">
@@ -1616,24 +1771,26 @@ with st.sidebar:
     <hr style="border-color:#21262d;margin:8px 0 20px 0;">
     """, unsafe_allow_html=True)
  
+    # UNITS: nome → (porta Observer, URL Observer, MV short name)
     UNITS = {
-        "Alto Araguaia":      ("21221", "http://services.repcenter.skf.com:21221"),
-        "Itumbiara":          ("21236", "http://services.repcenter.skf.com:21236"),
-        "Jataí":              ("21226", "http://services.repcenter.skf.com:21226"),
-        "Paraguaçu Paulista": ("21246", "http://services.repcenter.skf.com:21246"),
-        "Ponta Grossa":       ("21241", "http://services.repcenter.skf.com:21241"),
-        "Paranaguá":          ("22001", "http://services.repcenter.skf.com:22001"),    
+        "Alto Araguaia":      ("21221", "http://services.repcenter.skf.com:21221", "BRAEO13403"),
+        "Itumbiara":          ("21236", "http://services.repcenter.skf.com:21236", "BRAEO13402"),
+        "Jataí":              ("21226", "http://services.repcenter.skf.com:21226", "BRAEO13401"),
+        "Paraguaçu Paulista": ("21246", "http://services.repcenter.skf.com:21246", "BRAEO13404"),
+        "Ponta Grossa":       ("21241", "http://services.repcenter.skf.com:21241", "BRAEO13405"),
     }
 
     st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
 
-    for unit_name, (port, unit_url) in UNITS.items():
+    for unit_name, (port, unit_url, mv_short) in UNITS.items():
         is_active = st.session_state.get("selected_unit") == unit_name
         btn_label = f"{'▶ ' if is_active else '   '}{unit_name}  ·  :{port}"
         if st.button(btn_label, key=f"unit_{port}", use_container_width=True):
             if st.session_state.get("selected_unit") != unit_name:
                 st.session_state.selected_unit  = unit_name
                 st.session_state.base_url       = unit_url
+                st.session_state.mv_short_name  = mv_short   # ← sincroniza MV
+                st.session_state.mv_asset_sel   = None       # ← limpa seleção MV
                 st.session_state.token          = None
                 st.session_state.token_ts       = None
                 st.session_state.assets         = []
@@ -1646,22 +1803,39 @@ with st.sidebar:
                 st.session_state.imx_log        = []
                 st.session_state.fleet_data     = None
                 st.session_state.fleet_log      = []
+                # Limpa seleção MV ao trocar de unidade
+                if "mv_asset_sel" in st.session_state:
+                    del st.session_state["mv_asset_sel"]
+                if "mv_assets" in st.session_state:
+                    del st.session_state["mv_assets"]
                 st.rerun()
 
-    _active_url = st.session_state.get("base_url", "—")
+    _active_url   = st.session_state.get("base_url", "—")
+    _active_short = st.session_state.get("mv_short_name", "")
     st.markdown(
         f'<div style="font-family:Share Tech Mono,monospace;font-size:0.68rem;'
         f'color:#4a5a6a;word-break:break-all;margin:4px 0 12px 0;padding:6px 8px;'
         f'background:#162130;border-radius:4px;border:1px solid #2a3f52;">'
-        f'{_active_url}</div>',
+        f'{_active_url}'
+        f'{"  ·  " + _active_short if _active_short else ""}'
+        f'</div>',
         unsafe_allow_html=True,
     )
- 
+
     st.markdown('<div class="sidebar-label" style="margin-top:12px;">Usuário</div>', unsafe_allow_html=True)
-    username = st.text_input("", value=st.session_state.username, label_visibility="collapsed")
- 
+    username = st.text_input("", value=st.session_state.username, label_visibility="collapsed",
+                             key="sb_username")
+
     st.markdown('<div class="sidebar-label" style="margin-top:12px;">Senha</div>', unsafe_allow_html=True)
-    password = st.text_input("", type="password", placeholder="••••••••", label_visibility="collapsed")
+    password = st.text_input("", type="password", placeholder="••••••••",
+                             label_visibility="collapsed", key="sb_password")
+
+    st.markdown('<div class="sidebar-label" style="margin-top:12px;">API Key — Machine Viewer</div>',
+                unsafe_allow_html=True)
+    mv_api_key = st.text_input("", type="password", placeholder="x-api-key…",
+                               value=st.session_state.mv_api_key,
+                               label_visibility="collapsed", key="sb_mv_api_key")
+    st.session_state.mv_api_key = mv_api_key
  
     if st.button("🔌  Conectar", use_container_width=True):
         with st.spinner("Autenticando..."):
@@ -1786,10 +1960,11 @@ if not st.session_state.token:
 # ─────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────
-tab_monitor, tab_imx, tab_fleet = st.tabs([
+tab_monitor, tab_imx, tab_fleet, tab_mv = st.tabs([
     "📈  Monitor de Pontos",
     "🔬  IMx-1 Comissionamento",
     "🛰  Fleet Monitoring",
+    "🩺  Machine Viewer",
 ])
  
 # ══════════════════════════════════════════════
@@ -3473,3 +3648,479 @@ with tab_fleet:
         if st.session_state.fleet_log:
             with st.expander("📋  Log da Coleta de Frota"):
                 st.code("\n".join(st.session_state.fleet_log), language=None)
+
+# ══════════════════════════════════════════════
+# TAB 4 — MACHINE VIEWER
+# ══════════════════════════════════════════════
+with tab_mv:
+
+    st.markdown('<div class="section-title">Machine Viewer API — Condições e Medições</div>',
+                unsafe_allow_html=True)
+
+    # ── Validação de config ───────────────────────────────────────
+    if not st.session_state.mv_api_key:
+        st.markdown("""
+        <div class="alert-info">
+            ℹ  Preencha a <strong>API Key</strong> da Machine Viewer na barra lateral
+            (campo abaixo da Senha) e selecione uma unidade para usar esta aba.
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
+
+    # ── Filtros de período ────────────────────────────────────────
+    st.markdown('<div class="section-title">Filtros</div>', unsafe_allow_html=True)
+    col_d1, col_d2, col_load = st.columns([2, 2, 1])
+    with col_d1:
+        mv_from = st.date_input("De", value=datetime.now(timezone.utc).date() - timedelta(days=90),
+                                 key="mv_from")
+    with col_d2:
+        mv_to   = st.date_input("Até", value=datetime.now(timezone.utc).date(),
+                                 key="mv_to")
+    mv_from_str = f"{mv_from} 00:00:00"
+    mv_to_str   = f"{mv_to} 23:59:59"
+
+    # ── Carrega lista de assets ────────────────────────────────────
+    with col_load:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_mv_assets = st.button("🔄 Assets", use_container_width=True, key="btn_mv_assets")
+
+    if load_mv_assets:
+        with st.spinner("Carregando assets…"):
+            st.session_state.mv_assets = mv_get_assets()
+        if st.session_state.mv_assets:
+            st.session_state.mv_selected_asset = None
+            st.session_state.mv_conditions     = None
+            st.session_state.mv_measurements   = None
+            st.session_state.mv_workorders      = None
+            st.session_state.mv_alarms          = None
+
+    # ── Seleção de asset ──────────────────────────────────────────
+    mv_assets = st.session_state.mv_assets
+    if not mv_assets:
+        st.markdown('<div class="alert-info">ℹ  Clique em <b>🔄 Assets</b> para carregar os ativos.</div>',
+                    unsafe_allow_html=True)
+        st.stop()
+
+    # Tabela resumida de assets
+    df_mv_assets = pd.DataFrame([{
+        "ID":                 a.get("assetId"),
+        "Nome":               a.get("assetName"),
+        "Descrição":          a.get("assetDescription"),
+        "Status":             a.get("assetStatus"),
+        "Condição":           a.get("conditionIndex"),
+        "Criticidade":        a.get("criticality"),
+        "Segmento":           a.get("assetSegment"),
+        "Local Funcional":    a.get("functionalLocation"),
+    } for a in mv_assets])
+
+    st.markdown(f'<div class="section-title">Assets — {len(mv_assets)} encontrado(s)</div>',
+                unsafe_allow_html=True)
+    st.dataframe(df_mv_assets, use_container_width=True, hide_index=True, height=220,
+                 column_config={
+                     "ID":             st.column_config.NumberColumn("ID"),
+                     "Nome":           st.column_config.TextColumn("Nome"),
+                     "Descrição":      st.column_config.TextColumn("Descrição"),
+                     "Status":         st.column_config.TextColumn("Status"),
+                     "Condição":       st.column_config.ProgressColumn("Índice Condição",
+                                                                        min_value=0, max_value=100,
+                                                                        format="%.0f"),
+                     "Criticidade":    st.column_config.TextColumn("Crit."),
+                     "Segmento":       st.column_config.TextColumn("Segmento"),
+                     "Local Funcional":st.column_config.TextColumn("Local Funcional"),
+                 })
+
+    asset_opts = {f"[{a['assetId']}]  {a['assetName']}": a for a in mv_assets}
+
+    if not asset_opts:
+        st.markdown('<div class="alert-warn">⚠ Nenhum ativo encontrado para esta unidade.</div>',
+                    unsafe_allow_html=True)
+        st.stop()
+
+    # ── Seletor de asset ──────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_sel, col_btn_cond, col_btn_meas, col_btn_wo = st.columns([3, 1, 1, 1])
+
+    asset_keys = list(asset_opts.keys())
+
+    # Garante que o index nunca é inválido — evita KeyError por state desatualizado
+    _prev = st.session_state.get("mv_asset_sel")
+    _idx  = asset_keys.index(_prev) if _prev in asset_keys else 0
+
+    with col_sel:
+        chosen_mv = st.selectbox("Selecionar Ativo", asset_keys,
+                                  index=_idx,
+                                  key="mv_asset_sel", label_visibility="collapsed")
+    with col_btn_cond:
+        btn_conditions = st.button("📋 Condições", use_container_width=True, key="btn_mv_cond")
+    with col_btn_meas:
+        btn_measurements = st.button("📊 Medições", use_container_width=True, key="btn_mv_meas")
+    with col_btn_wo:
+        btn_workorders = st.button("🔧 O.S.", use_container_width=True, key="btn_mv_wo")
+
+    selected_mv_asset = asset_opts.get(chosen_mv) or asset_opts.get(asset_keys[0])
+    if not selected_mv_asset:
+        st.stop()
+
+    mv_asset_id = selected_mv_asset["assetId"]
+
+    # ── Carrega Condições ─────────────────────────────────────────
+    if btn_conditions:
+        with st.spinner("Carregando condições…"):
+            st.session_state.mv_conditions = mv_get_conditions(
+                mv_asset_id, mv_from_str, mv_to_str
+            )
+            st.session_state.mv_alarms = mv_get_alarms(mv_asset_id)
+            st.session_state.mv_selected_asset = selected_mv_asset
+
+    # ── Carrega Medições ──────────────────────────────────────────
+    if btn_measurements:
+        with st.spinner("Carregando medições…"):
+            st.session_state.mv_measurements = mv_get_measurements(
+                mv_asset_id, mv_from_str, mv_to_str
+            )
+            st.session_state.mv_selected_asset = selected_mv_asset
+
+    # ── Carrega Ordens de Serviço ─────────────────────────────────
+    if btn_workorders:
+        with st.spinner("Carregando ordens de serviço…"):
+            st.session_state.mv_workorders = mv_get_workorders(mv_from_str, mv_to_str)
+            st.session_state.mv_selected_asset = selected_mv_asset
+
+    sel_asset = st.session_state.mv_selected_asset
+    asset_title = f"{sel_asset['assetName']} — {sel_asset.get('assetDescription','')}" \
+                  if sel_asset else ""
+
+    # ════════════════════════════════════════════
+    # CONDIÇÕES
+    # ════════════════════════════════════════════
+    if st.session_state.mv_conditions is not None:
+        conditions = st.session_state.mv_conditions
+        st.markdown(f'<div class="section-title">Condições — {asset_title}</div>',
+                    unsafe_allow_html=True)
+
+        if not conditions:
+            st.markdown('<div class="alert-info">Nenhuma condição encontrada no período.</div>',
+                        unsafe_allow_html=True)
+        else:
+            df_cond = pd.DataFrame([{
+                "Data Coleta":   c.get("collectDate"),
+                "Data Condição": c.get("conditionDate"),
+                "Estado":        c.get("conditionState"),
+                "Tendência":     c.get("trend"),
+                "Técnica":       c.get("technique"),
+                "Inspeção":      c.get("inspectionType"),
+                "Valor Global":  c.get("globalValue"),
+                "Unidade":       c.get("globalValueUnity"),
+                "Status":        c.get("status"),
+                "Diagnóstico":   c.get("diagnostic"),
+                "Observação":    c.get("observation"),
+                "Analista":      c.get("author"),
+            } for c in conditions])
+
+            # KPIs de condição
+            estado_counts = df_cond["Estado"].value_counts()
+            n_conds = len(df_cond)
+
+            kpi_html = '<div class="metric-row">'
+            kpi_html += f'''
+            <div class="metric-card">
+                <div class="label">Registros</div>
+                <div class="value">{n_conds}</div>
+                <div class="unit">no período</div>
+            </div>'''
+            for estado, count in estado_counts.items():
+                cor = MV_CONDITION_COLORS.get(estado, "#5C6670")
+                kpi_html += f'''
+                <div class="metric-card">
+                    <div class="label">{estado}</div>
+                    <div class="value" style="color:{cor};">{count}</div>
+                    <div class="unit">ocorrência(s)</div>
+                </div>'''
+            kpi_html += '</div>'
+            st.markdown(kpi_html, unsafe_allow_html=True)
+
+            # Gráfico de linha: conditionState ao longo do tempo
+            df_cond["_dt"] = pd.to_datetime(df_cond["Data Coleta"], errors="coerce")
+            df_cond_plot   = df_cond.dropna(subset=["_dt"]).sort_values("_dt")
+
+            COND_NUM = {"Normal": 0, "Alert": 1, "Danger": 2, "Critical": 3}
+            df_cond_plot["_estado_num"] = df_cond_plot["Estado"].map(COND_NUM).fillna(-1)
+
+            if not df_cond_plot.empty:
+                fig_cond = go.Figure()
+
+                # Faixas de fundo por severidade
+                fig_cond.add_hrect(y0=-0.5, y1=0.5,
+                                   fillcolor="rgba(78,157,45,0.06)", line_width=0)
+                fig_cond.add_hrect(y0=0.5, y1=1.5,
+                                   fillcolor="rgba(186,148,75,0.08)", line_width=0)
+                fig_cond.add_hrect(y0=1.5, y1=2.5,
+                                   fillcolor="rgba(240,106,34,0.08)", line_width=0)
+                fig_cond.add_hrect(y0=2.5, y1=3.5,
+                                   fillcolor="rgba(192,57,43,0.10)", line_width=0)
+
+                point_colors = [MV_CONDITION_COLORS.get(e, "#5C6670")
+                                for e in df_cond_plot["Estado"]]
+
+                fig_cond.add_trace(go.Scatter(
+                    x=df_cond_plot["_dt"],
+                    y=df_cond_plot["_estado_num"],
+                    mode="lines+markers",
+                    line=dict(color="#A7C5E2", width=1.5),
+                    marker=dict(size=10, color=point_colors,
+                                line=dict(color="#0e1820", width=1)),
+                    customdata=df_cond_plot[["Estado","Diagnóstico","Analista",
+                                             "Técnica","Observação"]].values,
+                    hovertemplate=(
+                        "<b>%{x|%d/%m/%Y}</b><br>"
+                        "Estado: <b>%{customdata[0]}</b><br>"
+                        "Técnica: %{customdata[3]}<br>"
+                        "Diagnóstico: %{customdata[1]}<br>"
+                        "Analista: %{customdata[2]}<br>"
+                        "Obs: %{customdata[4]}<extra></extra>"
+                    ),
+                    name="Condição",
+                ))
+
+                fig_cond.update_layout(
+                    paper_bgcolor="#0e1820", plot_bgcolor="#162130",
+                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    title=dict(
+                        text=f"<b>Histórico de Condições</b> · {sel_asset['assetName']}",
+                        font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                               tickfont=dict(size=10, color="#98C0B8")),
+                    yaxis=dict(
+                        tickvals=[0, 1, 2, 3],
+                        ticktext=["Normal", "Alert", "Danger", "Critical"],
+                        tickfont=dict(size=10, color="#98C0B8"),
+                        gridcolor="#2a3f52", zeroline=False,
+                        range=[-0.5, 3.5],
+                    ),
+                    margin=dict(l=80, r=30, t=60, b=50),
+                    height=360,
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_cond, use_container_width=True)
+
+            # Tabela de condições
+            with st.expander("📋  Tabela de condições completa"):
+                st.dataframe(df_cond.drop(columns=["_dt","_estado_num"], errors="ignore"),
+                             use_container_width=True, hide_index=True, height=320)
+                csv_cond = df_cond.drop(columns=["_dt","_estado_num"], errors="ignore")\
+                                   .to_csv(index=False).encode("utf-8")
+                st.download_button("⬇  Exportar CSV", data=csv_cond,
+                                   file_name=f"conditions_{mv_asset_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                   mime="text/csv", key="dl_mv_cond")
+
+        # ── Alarmes configurados ──────────────────────────────────
+        if st.session_state.mv_alarms:
+            with st.expander("🔔  Limites de Alarme Configurados"):
+                df_alarms = pd.DataFrame(st.session_state.mv_alarms)
+                st.dataframe(df_alarms, use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════
+    # MEDIÇÕES
+    # ════════════════════════════════════════════
+    if st.session_state.mv_measurements is not None:
+        measurements = st.session_state.mv_measurements
+        st.markdown(f'<div class="section-title">Medições — {asset_title}</div>',
+                    unsafe_allow_html=True)
+
+        if not measurements:
+            st.markdown('<div class="alert-info">Nenhuma medição encontrada no período.</div>',
+                        unsafe_allow_html=True)
+        else:
+            df_meas = pd.DataFrame([{
+                "Data":       m.get("collectedDate"),
+                "PointID":    m.get("pointId"),
+                "Ponto":      m.get("pointName"),
+                "Canal":      m.get("channel"),
+                "Valor":      m.get("overallValue"),
+                "Unidade":    m.get("unit"),
+                "Status":     m.get("pointStatus"),
+            } for m in measurements])
+
+            df_meas["_dt"]   = pd.to_datetime(df_meas["Data"], errors="coerce")
+            df_meas["Valor"] = pd.to_numeric(df_meas["Valor"], errors="coerce")
+
+            # Seletor de ponto
+            pontos   = sorted(df_meas["Ponto"].dropna().unique().tolist())
+            sel_ponto = st.selectbox("Ponto de medição", pontos, key="mv_ponto_sel")
+            df_pt     = df_meas[df_meas["Ponto"] == sel_ponto].sort_values("_dt")
+            unit_mv   = df_pt["Unidade"].iloc[0] if not df_pt.empty else ""
+
+            if not df_pt.empty:
+                mu_mv    = df_pt["Valor"].mean()
+                sigma_mv = df_pt["Valor"].std()
+
+                # Alerta se houver limites configurados
+                alarm_row = None
+                if st.session_state.mv_alarms:
+                    pid = df_pt["PointID"].iloc[0]
+                    for ar in st.session_state.mv_alarms:
+                        if ar.get("pointId") == pid:
+                            alarm_row = ar
+                            break
+
+                fig_meas = go.Figure()
+                fig_meas.add_trace(go.Scatter(
+                    x=df_pt["_dt"], y=df_pt["Valor"],
+                    fill="tozeroy", fillcolor="rgba(50,85,110,0.08)",
+                    line=dict(color="rgba(0,0,0,0)"), showlegend=False, hoverinfo="skip",
+                ))
+                fig_meas.add_trace(go.Scatter(
+                    x=df_pt["_dt"], y=df_pt["Valor"],
+                    mode="lines+markers", name=f"{sel_ponto} [{unit_mv}]",
+                    line=dict(color="#A7C5E2", width=1.8),
+                    marker=dict(size=4, color="#A7C5E2"),
+                    hovertemplate="%{x|%d/%m/%Y %H:%M}<br><b>%{y:.4f}</b> "
+                                  + unit_mv + "<extra></extra>",
+                ))
+                # Linhas μ / σ
+                fig_meas.add_hline(y=mu_mv,
+                                   line=dict(color="#4E9D2D", width=1, dash="dash"),
+                                   annotation_text=f"μ={mu_mv:.3f}",
+                                   annotation_font=dict(color="#4E9D2D", size=9))
+
+                # Limites de alarme da API
+                if alarm_row:
+                    for lbl, val, color in [
+                        ("Alert High",  alarm_row.get("alertHigh"),  "#BA944B"),
+                        ("Alert Low",   alarm_row.get("alertLow"),   "#BA944B"),
+                        ("Danger High", alarm_row.get("dangerHigh"), "#F06A22"),
+                        ("Danger Low",  alarm_row.get("dangerLow"),  "#F06A22"),
+                    ]:
+                        if val is not None:
+                            try:
+                                fig_meas.add_hline(
+                                    y=float(val),
+                                    line=dict(color=color, width=1, dash="dot"),
+                                    annotation_text=f"{lbl} ({val})",
+                                    annotation_font=dict(color=color, size=9),
+                                )
+                            except Exception:
+                                pass
+
+                fig_meas.update_layout(
+                    paper_bgcolor="#0e1820", plot_bgcolor="#162130",
+                    font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                    title=dict(
+                        text=f"<b>Medições</b> · {sel_ponto} [{unit_mv}]",
+                        font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                        x=0.01,
+                    ),
+                    xaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                               tickfont=dict(size=10, color="#98C0B8"),
+                               title=dict(text="Data", font=dict(color="#98C0B8"))),
+                    yaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                               tickfont=dict(size=10, color="#98C0B8"),
+                               title=dict(text=f"Overall [{unit_mv}]",
+                                          font=dict(color="#98C0B8"))),
+                    legend=dict(bgcolor="rgba(22,33,48,0.9)", bordercolor="#2a3f52",
+                                borderwidth=1, font=dict(size=10, color="#A7C5E2")),
+                    margin=dict(l=70, r=30, t=60, b=50),
+                    height=400,
+                )
+                st.plotly_chart(fig_meas, use_container_width=True)
+
+            with st.expander("📊  Dados brutos de medições"):
+                st.dataframe(df_meas.drop(columns=["_dt"], errors="ignore"),
+                             use_container_width=True, hide_index=True, height=300)
+                csv_meas = df_meas.drop(columns=["_dt"], errors="ignore")\
+                                   .to_csv(index=False).encode("utf-8")
+                st.download_button("⬇  Exportar CSV", data=csv_meas,
+                                   file_name=f"measurements_{mv_asset_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                   mime="text/csv", key="dl_mv_meas")
+
+    # ════════════════════════════════════════════
+    # ORDENS DE SERVIÇO
+    # ════════════════════════════════════════════
+    if st.session_state.mv_workorders is not None:
+        workorders = st.session_state.mv_workorders
+        st.markdown(f'<div class="section-title">Ordens de Serviço — {mv_from_str[:10]} → {mv_to_str[:10]}</div>',
+                    unsafe_allow_html=True)
+
+        if not workorders:
+            st.markdown('<div class="alert-info">Nenhuma O.S. encontrada no período.</div>',
+                        unsafe_allow_html=True)
+        else:
+            df_wo = pd.DataFrame([{
+                "O.S.":           w.get("orderNumber"),
+                "AssetID":        w.get("assetId"),
+                "Técnica":        w.get("technique"),
+                "Prioridade":     w.get("priority"),
+                "Situação":       w.get("situation"),
+                "Data Abertura":  w.get("openingDate"),
+                "Prazo":          w.get("deadline"),
+                "Data Prevista":  w.get("scheduledDate"),
+                "Analista":       w.get("author"),
+                "CMMS":           w.get("cmms"),
+                "Reg. CMMS":      w.get("cmmsRegister"),
+                "Retrabalho":     w.get("reWork"),
+                "Serviços":       str(w.get("services", "")),
+            } for w in workorders])
+
+            n_wo       = len(df_wo)
+            n_retrab   = int(df_wo["Retrabalho"].fillna(False).astype(bool).sum())
+            sit_counts = df_wo["Situação"].value_counts()
+            retrab_cls = "warn" if n_retrab > 0 else ""
+
+            kpi_wo = f"""
+            <div class="metric-row">
+                <div class="metric-card ok">
+                    <div class="label">O.S. no Período</div>
+                    <div class="value">{n_wo}</div>
+                    <div class="unit">{mv_from_str[:10]} → {mv_to_str[:10]}</div>
+                </div>
+                <div class="metric-card {retrab_cls}">
+                    <div class="label">Retrabalho</div>
+                    <div class="value">{n_retrab}</div>
+                    <div class="unit">O.S. com retrabalho</div>
+                </div>
+            """
+            for sit, cnt in sit_counts.items():
+                kpi_wo += f"""
+                <div class="metric-card">
+                    <div class="label">{sit or "—"}</div>
+                    <div class="value">{cnt}</div>
+                    <div class="unit">O.S.</div>
+                </div>"""
+            kpi_wo += "</div>"
+            st.markdown(kpi_wo, unsafe_allow_html=True)
+
+            # Barras por situação
+            sit_df   = sit_counts.reset_index()
+            sit_df.columns = ["Situação", "Qtd"]
+            fig_wo = go.Figure(go.Bar(
+                x=sit_df["Situação"], y=sit_df["Qtd"],
+                marker=dict(color="#A7C5E2",
+                            line=dict(color="rgba(255,255,255,0.1)", width=0.5)),
+                text=sit_df["Qtd"], textposition="outside",
+                textfont=dict(size=11, color="#EEF4F9"),
+                hovertemplate="<b>%{x}</b><br>%{y} O.S.<extra></extra>",
+            ))
+            fig_wo.update_layout(
+                paper_bgcolor="#0e1820", plot_bgcolor="#162130",
+                font=dict(family="Exo 2, sans-serif", color="#98C0B8", size=11),
+                title=dict(text="<b>Ordens de Serviço por Situação</b>",
+                           font=dict(family="Rajdhani, sans-serif", size=16, color="#EEF4F9"),
+                           x=0.01),
+                xaxis=dict(gridcolor="#2a3f52",
+                           tickfont=dict(size=10, color="#98C0B8")),
+                yaxis=dict(gridcolor="#2a3f52", zeroline=False,
+                           tickfont=dict(size=10, color="#98C0B8"),
+                           title=dict(text="Qtd.", font=dict(color="#98C0B8"))),
+                margin=dict(l=50, r=20, t=50, b=50),
+                height=300, showlegend=False,
+            )
+            st.plotly_chart(fig_wo, use_container_width=True)
+
+            with st.expander("🔧  Tabela de Ordens de Serviço"):
+                st.dataframe(df_wo, use_container_width=True, hide_index=True, height=350)
+                csv_wo = df_wo.to_csv(index=False).encode("utf-8")
+                st.download_button("⬇  Exportar CSV", data=csv_wo,
+                                   file_name=f"workorders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                   mime="text/csv", key="dl_mv_wo")
