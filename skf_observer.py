@@ -256,7 +256,7 @@ for key, default in {
     "fleet_log":      [],
     "base_url":       "http://services.repcenter.skf.com",
     "selected_unit":  None,
-    "username":       "usu.ario",
+    "username":       "patrick.coelho",
     "_password":      "",
     # Machine Viewer API
     "mv_api_key":      "",
@@ -1763,7 +1763,7 @@ with st.sidebar:
     <div style="padding:16px 0 8px;">
         <div style="font-family:'Rajdhani',sans-serif;font-size:1.4rem;font-weight:700;
                     letter-spacing:3px;text-transform:uppercase;color:#e6edf3;">
-            Preditiva LDC - Monitoramento Online
+            Preditiva **** - Monitoramento Online
         </div>
         <div style="font-family:'Share Tech Mono',monospace;font-size:0.68rem;
                     color:#00d9ff;letter-spacing:2px;">PHOENIX API v2.0</div>
@@ -1773,11 +1773,11 @@ with st.sidebar:
  
     # UNITS: nome → (porta Observer, URL Observer, MV short name)
     UNITS = {
-        "Unidade A":      ("21221", "http://services.repcenter.skf.com:00000", "BRAEO0000"),
-        "Itumbiara":          ("21236", "http://services.repcenter.skf.com:11111", "BRAEO11111"),
-        "Jataí":              ("21226", "http://services.repcenter.skf.com:22222", "BRAEO22222"),
-        "Paraguaçu Paulista": ("21246", "http://services.repcenter.skf.com:333333", "BRAEO33333"),
-        "Ponta Grossa":       ("21241", "http://services.repcenter.skf.com:444444", "BRAEO44444"),
+        "XXXXXX":      ("00000", "http://services.repcenter.skf.com:00000", "BRAEO00000"),
+        "XXXXXX":          ("00000", "http://services.repcenter.skf.com:00000", "BRAEO00000"),
+        "XXXXXX":              ("00000", "http://services.repcenter.skf.com:00000", "BRAEO00000"),
+        "XXXXXX": ("000000", "http://services.repcenter.skf.com:00000", "BRAEO00000"),
+        "XXXXXX":       ("00000", "http://services.repcenter.skf.com:00000", "BRAEO00000"),
     }
 
     st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
@@ -3729,11 +3729,22 @@ with tab_mv:
                      "Local Funcional":st.column_config.TextColumn("Local Funcional"),
                  })
 
-    asset_opts = {f"[{a['assetId']}]  {a['assetName']}": a for a in mv_assets}
+    # Monta dict label → asset, tolerando campos None
+    asset_opts = {}
+    for a in mv_assets:
+        aid   = a.get("assetId")
+        aname = a.get("assetName") or a.get("assetDescription") or str(aid)
+        if aid is None:
+            continue
+        label = f"[{aid}]  {aname}"
+        asset_opts[label] = a
 
+    # Debug: mostra estrutura da API se asset_opts vazio
     if not asset_opts:
-        st.markdown('<div class="alert-warn">⚠ Nenhum ativo encontrado para esta unidade.</div>',
-                    unsafe_allow_html=True)
+        st.markdown('<div class="alert-warn">⚠ Assets carregados mas sem <code>assetId</code> válido. '
+                    'Verifique a estrutura abaixo:</div>', unsafe_allow_html=True)
+        with st.expander("🔍 Estrutura bruta retornada pela API"):
+            st.json(mv_assets[:3] if len(mv_assets) >= 3 else mv_assets)
         st.stop()
 
     # ── Seletor de asset ──────────────────────────────────────────
@@ -3742,26 +3753,31 @@ with tab_mv:
 
     asset_keys = list(asset_opts.keys())
 
-    # Garante que o index nunca é inválido — evita KeyError por state desatualizado
+    # Garante index válido — evita erro por state desatualizado entre unidades
     _prev = st.session_state.get("mv_asset_sel")
-    _idx  = asset_keys.index(_prev) if _prev in asset_keys else 0
+    _idx  = asset_keys.index(_prev) if isinstance(_prev, str) and _prev in asset_keys else 0
 
     with col_sel:
         chosen_mv = st.selectbox("Selecionar Ativo", asset_keys,
                                   index=_idx,
                                   key="mv_asset_sel", label_visibility="collapsed")
     with col_btn_cond:
-        btn_conditions = st.button("📋 Condições", use_container_width=True, key="btn_mv_cond")
+        btn_conditions   = st.button("📋 Condições",  use_container_width=True, key="btn_mv_cond")
     with col_btn_meas:
-        btn_measurements = st.button("📊 Medições", use_container_width=True, key="btn_mv_meas")
+        btn_measurements = st.button("📊 Medições",   use_container_width=True, key="btn_mv_meas")
     with col_btn_wo:
-        btn_workorders = st.button("🔧 O.S.", use_container_width=True, key="btn_mv_wo")
+        btn_workorders   = st.button("🔧 O.S.",        use_container_width=True, key="btn_mv_wo")
 
-    selected_mv_asset = asset_opts.get(chosen_mv) or asset_opts.get(asset_keys[0])
-    if not selected_mv_asset:
+    # Lookup seguro do asset selecionado
+    selected_mv_asset = asset_opts.get(chosen_mv)
+    if selected_mv_asset is None and asset_keys:
+        selected_mv_asset = asset_opts[asset_keys[0]]
+    if selected_mv_asset is None:
+        st.markdown('<div class="alert-warn">⚠ Não foi possível selecionar um ativo.</div>',
+                    unsafe_allow_html=True)
         st.stop()
 
-    mv_asset_id = selected_mv_asset["assetId"]
+    mv_asset_id = selected_mv_asset.get("assetId")
 
     # ── Carrega Condições ─────────────────────────────────────────
     if btn_conditions:
