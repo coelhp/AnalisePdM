@@ -256,7 +256,7 @@ for key, default in {
     "fleet_log":      [],
     "base_url":       "http://services.repcenter.skf.com",
     "selected_unit":  None,
-    "username":       "patrick.coelho",
+    "username":       "usu.ario",
     "_password":      "",
     # Machine Viewer API
     "mv_api_key":      "",
@@ -1773,11 +1773,11 @@ with st.sidebar:
  
     # UNITS: nome → (porta Observer, URL Observer, MV short name)
     UNITS = {
-        "Alto Araguaia":      ("21221", "http://services.repcenter.skf.com:21221", "BRAEO13403"),
-        "Itumbiara":          ("21236", "http://services.repcenter.skf.com:21236", "BRAEO13402"),
-        "Jataí":              ("21226", "http://services.repcenter.skf.com:21226", "BRAEO13401"),
-        "Paraguaçu Paulista": ("21246", "http://services.repcenter.skf.com:21246", "BRAEO13404"),
-        "Ponta Grossa":       ("21241", "http://services.repcenter.skf.com:21241", "BRAEO13405"),
+        "Unidade A":      ("21221", "http://services.repcenter.skf.com:00000", "BRAEO0000"),
+        "Itumbiara":          ("21236", "http://services.repcenter.skf.com:11111", "BRAEO11111"),
+        "Jataí":              ("21226", "http://services.repcenter.skf.com:22222", "BRAEO22222"),
+        "Paraguaçu Paulista": ("21246", "http://services.repcenter.skf.com:333333", "BRAEO33333"),
+        "Ponta Grossa":       ("21241", "http://services.repcenter.skf.com:444444", "BRAEO44444"),
     }
 
     st.markdown('<div class="sidebar-label">Unidade</div>', unsafe_allow_html=True)
